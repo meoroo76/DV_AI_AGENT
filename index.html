@@ -762,6 +762,99 @@
       </p>
     </div>
   </section>
+  <div class="section-divider"></div>
+
+  <!-- ── SECTION 7: 주간 입고율 추이 비교 ── -->
+  <section class="section">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
+      <div class="section-title" style="margin-bottom:0;">
+        <div class="section-title-bar" style="background:var(--google-indigo);"></div>
+        <h2>주간 입고율 추이 비교</h2>
+        <span class="section-sub">26SS 실적·예측 vs 25SS 전년동기</span>
+      </div>
+    </div>
+
+    <!-- 필터 바 -->
+    <div class="filter-bar" style="flex-wrap:wrap;gap:10px;margin-bottom:16px;">
+      <div class="filter-group">
+        <span class="filter-label">구분</span>
+        <button class="cat-btn active" data-wk-cat="ALL" onclick="setWkCat('ALL')">전체</button>
+        <button class="cat-btn" data-wk-cat="down"   onclick="setWkCat('down')">DOWN</button>
+        <button class="cat-btn" data-wk-cat="outer"  onclick="setWkCat('outer')">OUTER</button>
+        <button class="cat-btn" data-wk-cat="top"    onclick="setWkCat('top')">TOP</button>
+        <button class="cat-btn" data-wk-cat="bottom" onclick="setWkCat('bottom')">BOTTOM</button>
+        <button class="cat-btn" data-wk-cat="acc"    onclick="setWkCat('acc')">ACC</button>
+      </div>
+      <div class="filter-divider"></div>
+      <div class="filter-group">
+        <span class="filter-label">성별</span>
+        <button class="cat-btn active" data-wk-gender="ALL"   onclick="setWkGender('ALL')">전체</button>
+        <button class="cat-btn" data-wk-gender="women" onclick="setWkGender('women')">여성</button>
+        <button class="cat-btn" data-wk-gender="men"   onclick="setWkGender('men')">남성</button>
+      </div>
+      <div class="filter-divider"></div>
+      <div class="filter-group">
+        <span class="filter-label">복종</span>
+        <select id="wkSubSelect" onchange="setWkSub(this.value)"
+          style="font-family:'Noto Sans KR',sans-serif;font-size:12px;padding:4px 10px;border:1.5px solid var(--border-strong);border-radius:20px;background:var(--bg-card);color:var(--text-primary);cursor:pointer;outline:none;">
+          <option value="ALL">전체</option>
+        </select>
+      </div>
+      <div class="filter-divider"></div>
+      <div class="filter-group">
+        <span class="filter-label">오더구분</span>
+        <button class="cat-btn active" data-wk-order="ALL"      onclick="setWkOrder('ALL')">전체</button>
+        <button class="cat-btn" data-wk-order="MAIN"     onclick="setWkOrder('MAIN')">MAIN</button>
+        <button class="cat-btn" data-wk-order="SPOT"     onclick="setWkOrder('SPOT')">SPOT</button>
+        <button class="cat-btn" data-wk-order="RE-ORDER" onclick="setWkOrder('RE-ORDER')">RE-ORDER</button>
+      </div>
+      <div class="filter-divider"></div>
+      <div class="filter-group">
+        <span class="filter-label">기준</span>
+        <button class="cat-btn active" data-wk-metric="styles" onclick="setWkMetric('styles')">스타일수</button>
+        <button class="cat-btn" data-wk-metric="qty"    onclick="setWkMetric('qty')">수량</button>
+        <button class="cat-btn" data-wk-metric="amt"    onclick="setWkMetric('amt')">금액</button>
+      </div>
+    </div>
+
+    <!-- 차트 -->
+    <div style="background:var(--bg-card);border:1px solid var(--border-strong);border-radius:12px;padding:28px 24px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.06);">
+      <div style="position:relative;height:340px;">
+        <canvas id="weeklyCompChart"></canvas>
+      </div>
+      <!-- 범례 + 안내 -->
+      <div style="margin-top:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <div style="display:flex;gap:20px;align-items:center;">
+          <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);">
+            <span style="display:inline-block;width:28px;height:3px;background:#4285F4;border-radius:2px;vertical-align:middle;"></span>26SS 실적
+          </span>
+          <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);">
+            <span style="display:inline-block;width:28px;height:0;border-top:2px dashed rgba(66,133,244,0.6);vertical-align:middle;"></span>26SS 예측
+          </span>
+          <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);">
+            <span style="display:inline-block;width:28px;height:3px;background:#34A853;border-radius:2px;vertical-align:middle;"></span>25SS 실적
+          </span>
+        </div>
+        <div id="wkDataNote" style="font-size:11px;color:var(--text-secondary);font-style:italic;"></div>
+      </div>
+    </div>
+
+    <!-- 주차별 수치 요약 테이블 -->
+    <div style="margin-top:16px;background:var(--bg-card);border:1px solid var(--border-strong);border-radius:12px;overflow:auto;box-shadow:0 1px 4px rgba(0,0,0,0.06);">
+      <table class="data-table" id="wkSummaryTable" style="min-width:600px;">
+        <thead>
+          <tr>
+            <th style="text-align:left;min-width:90px;">주차</th>
+            <th style="min-width:80px;">구분</th>
+            <th style="min-width:100px;">26SS 누적입고율</th>
+            <th style="min-width:100px;">25SS 참조율</th>
+            <th style="min-width:80px;">격차</th>
+          </tr>
+        </thead>
+        <tbody id="wkSummaryBody"></tbody>
+      </table>
+    </div>
+  </section>
 
   <div class="section-divider"></div>
 
@@ -1142,99 +1235,6 @@
     </div>
   </section>
 
-  <div class="section-divider"></div>
-
-  <!-- ── SECTION 7: 주간 입고율 추이 비교 ── -->
-  <section class="section">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
-      <div class="section-title" style="margin-bottom:0;">
-        <div class="section-title-bar" style="background:var(--google-indigo);"></div>
-        <h2>주간 입고율 추이 비교</h2>
-        <span class="section-sub">26SS 실적·예측 vs 25SS 전년동기</span>
-      </div>
-    </div>
-
-    <!-- 필터 바 -->
-    <div class="filter-bar" style="flex-wrap:wrap;gap:10px;margin-bottom:16px;">
-      <div class="filter-group">
-        <span class="filter-label">구분</span>
-        <button class="cat-btn active" data-wk-cat="ALL" onclick="setWkCat('ALL')">전체</button>
-        <button class="cat-btn" data-wk-cat="down"   onclick="setWkCat('down')">DOWN</button>
-        <button class="cat-btn" data-wk-cat="outer"  onclick="setWkCat('outer')">OUTER</button>
-        <button class="cat-btn" data-wk-cat="top"    onclick="setWkCat('top')">TOP</button>
-        <button class="cat-btn" data-wk-cat="bottom" onclick="setWkCat('bottom')">BOTTOM</button>
-        <button class="cat-btn" data-wk-cat="acc"    onclick="setWkCat('acc')">ACC</button>
-      </div>
-      <div class="filter-divider"></div>
-      <div class="filter-group">
-        <span class="filter-label">성별</span>
-        <button class="cat-btn active" data-wk-gender="ALL"   onclick="setWkGender('ALL')">전체</button>
-        <button class="cat-btn" data-wk-gender="women" onclick="setWkGender('women')">여성</button>
-        <button class="cat-btn" data-wk-gender="men"   onclick="setWkGender('men')">남성</button>
-      </div>
-      <div class="filter-divider"></div>
-      <div class="filter-group">
-        <span class="filter-label">복종</span>
-        <select id="wkSubSelect" onchange="setWkSub(this.value)"
-          style="font-family:'Noto Sans KR',sans-serif;font-size:12px;padding:4px 10px;border:1.5px solid var(--border-strong);border-radius:20px;background:var(--bg-card);color:var(--text-primary);cursor:pointer;outline:none;">
-          <option value="ALL">전체</option>
-        </select>
-      </div>
-      <div class="filter-divider"></div>
-      <div class="filter-group">
-        <span class="filter-label">오더구분</span>
-        <button class="cat-btn active" data-wk-order="ALL"      onclick="setWkOrder('ALL')">전체</button>
-        <button class="cat-btn" data-wk-order="MAIN"     onclick="setWkOrder('MAIN')">MAIN</button>
-        <button class="cat-btn" data-wk-order="SPOT"     onclick="setWkOrder('SPOT')">SPOT</button>
-        <button class="cat-btn" data-wk-order="RE-ORDER" onclick="setWkOrder('RE-ORDER')">RE-ORDER</button>
-      </div>
-      <div class="filter-divider"></div>
-      <div class="filter-group">
-        <span class="filter-label">기준</span>
-        <button class="cat-btn active" data-wk-metric="styles" onclick="setWkMetric('styles')">스타일수</button>
-        <button class="cat-btn" data-wk-metric="qty"    onclick="setWkMetric('qty')">수량</button>
-        <button class="cat-btn" data-wk-metric="amt"    onclick="setWkMetric('amt')">금액</button>
-      </div>
-    </div>
-
-    <!-- 차트 -->
-    <div style="background:var(--bg-card);border:1px solid var(--border-strong);border-radius:12px;padding:28px 24px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.06);">
-      <div style="position:relative;height:340px;">
-        <canvas id="weeklyCompChart"></canvas>
-      </div>
-      <!-- 범례 + 안내 -->
-      <div style="margin-top:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-        <div style="display:flex;gap:20px;align-items:center;">
-          <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);">
-            <span style="display:inline-block;width:28px;height:3px;background:#4285F4;border-radius:2px;vertical-align:middle;"></span>26SS 실적
-          </span>
-          <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);">
-            <span style="display:inline-block;width:28px;height:0;border-top:2px dashed rgba(66,133,244,0.6);vertical-align:middle;"></span>26SS 예측
-          </span>
-          <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);">
-            <span style="display:inline-block;width:28px;height:3px;background:#34A853;border-radius:2px;vertical-align:middle;"></span>25SS 실적
-          </span>
-        </div>
-        <div id="wkDataNote" style="font-size:11px;color:var(--text-secondary);font-style:italic;"></div>
-      </div>
-    </div>
-
-    <!-- 주차별 수치 요약 테이블 -->
-    <div style="margin-top:16px;background:var(--bg-card);border:1px solid var(--border-strong);border-radius:12px;overflow:auto;box-shadow:0 1px 4px rgba(0,0,0,0.06);">
-      <table class="data-table" id="wkSummaryTable" style="min-width:600px;">
-        <thead>
-          <tr>
-            <th style="text-align:left;min-width:90px;">주차</th>
-            <th style="min-width:80px;">구분</th>
-            <th style="min-width:100px;">26SS 누적입고율</th>
-            <th style="min-width:100px;">25SS 참조율</th>
-            <th style="min-width:80px;">격차</th>
-          </tr>
-        </thead>
-        <tbody id="wkSummaryBody"></tbody>
-      </table>
-    </div>
-  </section>
 
 
 </div><!-- /main -->
