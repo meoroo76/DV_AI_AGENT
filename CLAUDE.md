@@ -42,10 +42,10 @@ Excel 파일 교체(NEW INPUT/) → python update_dashboard.py → git add index
 ### 데이터 흐름
 ```
 NEW INPUT/
-  24fw-26ss_stylemaster_v8.csv   ─┐
-  26SS_PO.xlsx / 25SS_PO.xlsx    ─┤→ update_dashboard.py → delivery-dashboard_YYYYMMDD.html
-  26SS입고현황.xlsx / 25SS입고현황.xlsx ─┤                    → delivery-dashboard-offline_YYYYMMDD.html
-  ■ 26SS_DV_생산스케줄 취합_*.xlsx  ─┘
+  24fw-26ss_stylemaster_v8.csv       ─┐
+  26SS_PO.xlsx / 25SS_PO.xlsx        ─┤→ update_dashboard.py → index.html  (Git/Vercel 배포)
+  26SS입고현황.xlsx / 25SS입고현황.xlsx   ─┤                    → delivery-dashboard-offline.html  (로컬 전용, gitignore)
+  ■ 26SS_DV_생산스케줄 취합_*.xlsx    ─┘
 ```
 
 ### update_dashboard.py 핵심 함수
@@ -70,7 +70,7 @@ NEW INPUT/
 | `to_date_str(v)` | Excel 날짜 시리얼 → `YYYY-MM-DD` 문자열 변환 |
 
 ### HTML 마커 구조
-`delivery-dashboard.html` 내부에 마커로 구분된 교체 구간이 있다:
+`index.html` 내부에 마커로 구분된 교체 구간이 있다:
 - `<!-- ═ KPI_GRID_BEGIN ═ -->` … `<!-- ═ KPI_GRID_END ═ -->` — KPI 카드 HTML
 - `// ═══ CAT_DATA_BEGIN ═══` … `// ═══ CAT_DATA_END ═══` — 복종별 수량/스타일/금액 JS 데이터
 - `// ═══ ORDER_METRIC_BEGIN ═══` … `// ═══ ORDER_METRIC_END ═══` — 오더구분별 JS 데이터
@@ -96,7 +96,7 @@ NEW INPUT/
 | `24fw-26ss_stylemaster_v8.csv` | 스타일마스터 — `style_id`, `season`, `gender`, `category`, `detail1` 컬럼 |
 | `26SS_PO.xlsx` / `25SS_PO.xlsx` | 발주 데이터 — `스타일코드`, `협력사`, 발주수량, 발주금액 등 |
 | `26SS입고현황.xlsx` / `25SS입고현황.xlsx` | 입고현황 데이터 |
-| `■ 26SS_DV_생산스케줄 취합_*.xlsx` | 26SS 생산 스케줄 (주차별 입고예정) — 파일명 날짜 변경 시 `SCHED_PATH` 상수 직접 수정 필요 |
+| `■ 26SS_DV_생산스케줄 취합_*.xlsx` | 26SS 생산 스케줄 (주차별 입고예정) — 파일명 날짜 변경 시 `update_dashboard.py` 상단 `SCHED_PATH` 상수(27번째 줄 근처) 직접 수정 필요 |
 | `26SS(25SS) 발주입고현황_0312.xlsx` | 레거시 통합 파일 — `update_dashboard_legacy.py` 전용, 현재 스크립트에서는 미사용 |
 
 ### 오더 분류 로직
@@ -131,6 +131,13 @@ NEW INPUT/
 - `index.html` 수정은 Git 커밋 히스토리로 관리 (날짜 파일 불필요)
 - HTML 구조를 크게 변경할 때는 커밋 메시지에 변경 내용 명시
 - 1차 개발 백업: `_archive/` 폴더 (로컬 전용)
+
+### gitignore 요약
+| 커밋 대상 | gitignore (로컬 전용) |
+|-----------|----------------------|
+| `index.html`, `update_dashboard.py`, `업데이트_실행.bat` | `NEW INPUT/` (원본 데이터) |
+| `docs/`, `README.md`, `CLAUDE.md` | `delivery-dashboard*.html` (날짜 버전) |
+| | `_archive/`, `chart.min.js`, `.bkit/`, `__pycache__/` |
 
 ## PDCA 문서 위치
 
