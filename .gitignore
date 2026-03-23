@@ -28,3 +28,4 @@ Thumbs.db
 
 # 레거시
 update_dashboard_legacy.py
+.vercel
