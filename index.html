@@ -934,6 +934,94 @@
 
   <div class="section-divider"></div>
 
+  <!-- ── SECTION 5: 26SS 미입고 스타일 내역 ── -->
+  <section class="section">
+    <div style="margin-bottom:20px;">
+      <div class="section-title">
+        <div class="section-title-bar" style="background:var(--google-red);"></div>
+        <h2>26SS 미입고 스타일 내역</h2>
+        <span class="section-sub">발주수량 기준 미입고 스타일</span>
+      </div>
+    </div>
+
+    <!-- 필터 바 1: 구분 / 성별 / 오더구분 -->
+    <div class="filter-bar">
+      <div class="filter-group">
+        <span class="filter-label">구분</span>
+        <button class="cat-btn active" data-ud-cat="ALL"    onclick="setUdCat('ALL')">전체</button>
+        <button class="cat-btn"        data-ud-cat="down"   onclick="setUdCat('down')">다운</button>
+        <button class="cat-btn"        data-ud-cat="outer"  onclick="setUdCat('outer')">아우터</button>
+        <button class="cat-btn"        data-ud-cat="top"    onclick="setUdCat('top')">상의</button>
+        <button class="cat-btn"        data-ud-cat="bottom" onclick="setUdCat('bottom')">하의</button>
+        <button class="cat-btn"        data-ud-cat="acc"    onclick="setUdCat('acc')">잡화</button>
+      </div>
+      <div class="filter-divider"></div>
+      <div class="filter-group">
+        <span class="filter-label">성별</span>
+        <button class="cat-btn active" data-ud-gender="ALL"   onclick="setUdGender('ALL')">전체</button>
+        <button class="cat-btn"        data-ud-gender="women" onclick="setUdGender('women')">Women</button>
+        <button class="cat-btn"        data-ud-gender="men"   onclick="setUdGender('men')">Men</button>
+      </div>
+      <div class="filter-divider"></div>
+      <div class="filter-group">
+        <span class="filter-label">오더</span>
+        <button class="cat-btn active"    data-ud-order="ALL"      onclick="setUdOrder('ALL')">전체</button>
+        <button class="cat-btn"           data-ud-order="MAIN"     onclick="setUdOrder('MAIN')">MAIN</button>
+        <button class="cat-btn"           data-ud-order="SPOT"     onclick="setUdOrder('SPOT')">SPOT</button>
+        <button class="cat-btn"           data-ud-order="RE-ORDER" onclick="setUdOrder('RE-ORDER')">RE-ORDER</button>
+      </div>
+    </div>
+
+    <!-- 필터 바 2: 복종 / 입고예정일 기간 / 검색 -->
+    <div class="filter-bar">
+      <div class="filter-group">
+        <span class="filter-label">복종</span>
+        <select id="udSubSelect" class="date-input" style="width:150px;" onchange="renderUdTable()">
+          <option value="ALL">전체</option>
+        </select>
+      </div>
+      <div class="filter-divider"></div>
+      <div class="filter-group">
+        <span class="filter-label">입고예정일</span>
+        <input type="date" id="udEddFrom" class="date-input" oninput="renderUdTable()" />
+        <span style="font-size:12px;color:var(--text-secondary);">~</span>
+        <input type="date" id="udEddTo"   class="date-input" oninput="renderUdTable()" />
+      </div>
+      <div class="filter-divider"></div>
+      <div class="filter-group">
+        <span class="filter-label">검색</span>
+        <input type="text" id="udSearchInput" class="search-input" placeholder="품번 / 협력사명" oninput="renderUdTable()" />
+      </div>
+      <span id="udCount" style="margin-left:auto;font-size:11px;font-family:'Roboto Mono',monospace;color:var(--text-secondary);white-space:nowrap;">0건</span>
+    </div>
+
+    <div style="background:var(--bg-card);border:1px solid var(--border-strong);border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.06);">
+      <div style="max-height:480px;overflow-y:auto;overflow-x:auto;">
+      <table class="data-table" id="udTable" style="min-width:900px;">
+        <thead>
+          <tr>
+            <th style="text-align:left;position:sticky;top:0;z-index:2;background:#F8F9FA;">구분</th>
+            <th style="position:sticky;top:0;z-index:2;background:#F8F9FA;">성별</th>
+            <th style="text-align:left;position:sticky;top:0;z-index:2;background:#F8F9FA;">복종</th>
+            <th style="position:sticky;top:0;z-index:2;background:#F8F9FA;">오더구분</th>
+            <th style="text-align:center;width:52px;min-width:52px;position:sticky;top:0;z-index:2;background:#F8F9FA;">이미지</th>
+            <th style="text-align:left;position:sticky;top:0;z-index:2;background:#F8F9FA;">품번</th>
+            <th style="text-align:left;width:80px;min-width:80px;position:sticky;top:0;z-index:2;background:#F8F9FA;">협력사명</th>
+            <th class="num" style="position:sticky;top:0;z-index:2;background:#F8F9FA;">발주수량</th>
+            <th class="num" style="position:sticky;top:0;z-index:2;background:#F8F9FA;">입고수량</th>
+            <th style="text-align:center;white-space:nowrap;position:sticky;top:0;z-index:2;background:#F8F9FA;">MD합의납기일</th>
+            <th style="text-align:center;white-space:nowrap;position:sticky;top:0;z-index:2;background:#F8F9FA;">입고예정일</th>
+            <th style="text-align:left;width:320px;min-width:320px;position:sticky;top:0;z-index:2;background:#F8F9FA;">스타일 히스토리</th>
+          </tr>
+        </thead>
+        <tbody id="udTableBody"></tbody>
+      </table>
+      </div>
+    </div>
+  </section>
+
+  <div class="section-divider"></div>
+
   <!-- ── 발주월별 상세 현황 ── -->
   <section class="section">
     <div style="margin-bottom:16px;">
@@ -1086,94 +1174,6 @@
           </div>
         </div>
 
-      </div>
-    </div>
-  </section>
-
-  <div class="section-divider"></div>
-
-  <!-- ── SECTION 5: 26SS 미입고 스타일 내역 ── -->
-  <section class="section">
-    <div style="margin-bottom:20px;">
-      <div class="section-title">
-        <div class="section-title-bar" style="background:var(--google-red);"></div>
-        <h2>26SS 미입고 스타일 내역</h2>
-        <span class="section-sub">발주수량 기준 미입고 스타일</span>
-      </div>
-    </div>
-
-    <!-- 필터 바 1: 구분 / 성별 / 오더구분 -->
-    <div class="filter-bar">
-      <div class="filter-group">
-        <span class="filter-label">구분</span>
-        <button class="cat-btn active" data-ud-cat="ALL"    onclick="setUdCat('ALL')">전체</button>
-        <button class="cat-btn"        data-ud-cat="down"   onclick="setUdCat('down')">다운</button>
-        <button class="cat-btn"        data-ud-cat="outer"  onclick="setUdCat('outer')">아우터</button>
-        <button class="cat-btn"        data-ud-cat="top"    onclick="setUdCat('top')">상의</button>
-        <button class="cat-btn"        data-ud-cat="bottom" onclick="setUdCat('bottom')">하의</button>
-        <button class="cat-btn"        data-ud-cat="acc"    onclick="setUdCat('acc')">잡화</button>
-      </div>
-      <div class="filter-divider"></div>
-      <div class="filter-group">
-        <span class="filter-label">성별</span>
-        <button class="cat-btn active" data-ud-gender="ALL"   onclick="setUdGender('ALL')">전체</button>
-        <button class="cat-btn"        data-ud-gender="women" onclick="setUdGender('women')">Women</button>
-        <button class="cat-btn"        data-ud-gender="men"   onclick="setUdGender('men')">Men</button>
-      </div>
-      <div class="filter-divider"></div>
-      <div class="filter-group">
-        <span class="filter-label">오더</span>
-        <button class="cat-btn active"    data-ud-order="ALL"      onclick="setUdOrder('ALL')">전체</button>
-        <button class="cat-btn"           data-ud-order="MAIN"     onclick="setUdOrder('MAIN')">MAIN</button>
-        <button class="cat-btn"           data-ud-order="SPOT"     onclick="setUdOrder('SPOT')">SPOT</button>
-        <button class="cat-btn"           data-ud-order="RE-ORDER" onclick="setUdOrder('RE-ORDER')">RE-ORDER</button>
-      </div>
-    </div>
-
-    <!-- 필터 바 2: 복종 / 입고예정일 기간 / 검색 -->
-    <div class="filter-bar">
-      <div class="filter-group">
-        <span class="filter-label">복종</span>
-        <select id="udSubSelect" class="date-input" style="width:150px;" onchange="renderUdTable()">
-          <option value="ALL">전체</option>
-        </select>
-      </div>
-      <div class="filter-divider"></div>
-      <div class="filter-group">
-        <span class="filter-label">입고예정일</span>
-        <input type="date" id="udEddFrom" class="date-input" oninput="renderUdTable()" />
-        <span style="font-size:12px;color:var(--text-secondary);">~</span>
-        <input type="date" id="udEddTo"   class="date-input" oninput="renderUdTable()" />
-      </div>
-      <div class="filter-divider"></div>
-      <div class="filter-group">
-        <span class="filter-label">검색</span>
-        <input type="text" id="udSearchInput" class="search-input" placeholder="품번 / 협력사명" oninput="renderUdTable()" />
-      </div>
-      <span id="udCount" style="margin-left:auto;font-size:11px;font-family:'Roboto Mono',monospace;color:var(--text-secondary);white-space:nowrap;">0건</span>
-    </div>
-
-    <div style="background:var(--bg-card);border:1px solid var(--border-strong);border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.06);">
-      <div style="max-height:480px;overflow-y:auto;overflow-x:auto;">
-      <table class="data-table" id="udTable" style="min-width:900px;">
-        <thead>
-          <tr>
-            <th style="text-align:left;position:sticky;top:0;z-index:2;background:#F8F9FA;">구분</th>
-            <th style="position:sticky;top:0;z-index:2;background:#F8F9FA;">성별</th>
-            <th style="text-align:left;position:sticky;top:0;z-index:2;background:#F8F9FA;">복종</th>
-            <th style="position:sticky;top:0;z-index:2;background:#F8F9FA;">오더구분</th>
-            <th style="text-align:center;width:52px;min-width:52px;position:sticky;top:0;z-index:2;background:#F8F9FA;">이미지</th>
-            <th style="text-align:left;position:sticky;top:0;z-index:2;background:#F8F9FA;">품번</th>
-            <th style="text-align:left;width:80px;min-width:80px;position:sticky;top:0;z-index:2;background:#F8F9FA;">협력사명</th>
-            <th class="num" style="position:sticky;top:0;z-index:2;background:#F8F9FA;">발주수량</th>
-            <th class="num" style="position:sticky;top:0;z-index:2;background:#F8F9FA;">입고수량</th>
-            <th style="text-align:center;white-space:nowrap;position:sticky;top:0;z-index:2;background:#F8F9FA;">MD합의납기일</th>
-            <th style="text-align:center;white-space:nowrap;position:sticky;top:0;z-index:2;background:#F8F9FA;">입고예정일</th>
-            <th style="text-align:left;width:320px;min-width:320px;position:sticky;top:0;z-index:2;background:#F8F9FA;">스타일 히스토리</th>
-          </tr>
-        </thead>
-        <tbody id="udTableBody"></tbody>
-      </table>
       </div>
     </div>
   </section>
