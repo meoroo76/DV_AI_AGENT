@@ -96,7 +96,7 @@ NEW INPUT/
 | `24fw-26ss_stylemaster_v8.csv` | 스타일마스터 — `style_id`, `season`, `gender`, `category`, `detail1` 컬럼 |
 | `26SS_PO.xlsx` / `25SS_PO.xlsx` | 발주 데이터 — `스타일코드`, `협력사`, 발주수량, 발주금액 등 |
 | `26SS입고현황.xlsx` / `25SS입고현황.xlsx` | 입고현황 데이터 |
-| `■ 26SS_DV_생산스케줄 취합_*.xlsx` | 26SS 생산 스케줄 (주차별 입고예정) — 파일명 날짜 변경 시 `update_dashboard.py` 상단 `SCHED_PATH` 상수(27번째 줄 근처) 직접 수정 필요 |
+| `■ 26SS_DV_생산스케줄 취합_*.xlsx` | 26SS 생산 스케줄 (주차별 입고예정) — 파일명 변경 시 `update_dashboard.py` 27번째 줄 `SCHED_PATH` 상수를 직접 수정 |
 | `26SS(25SS) 발주입고현황_0312.xlsx` | 레거시 통합 파일 — `update_dashboard_legacy.py` 전용, 현재 스크립트에서는 미사용 |
 
 ### 오더 분류 로직
@@ -135,9 +135,10 @@ NEW INPUT/
 ### gitignore 요약
 | 커밋 대상 | gitignore (로컬 전용) |
 |-----------|----------------------|
-| `index.html`, `update_dashboard.py`, `업데이트_실행.bat` | `NEW INPUT/` (원본 데이터) |
-| `docs/`, `README.md`, `CLAUDE.md` | `delivery-dashboard*.html` (날짜 버전) |
+| `index.html`, `update_dashboard.py`, `업데이트_실행.bat` | `NEW INPUT/` (원본 데이터 — 비즈니스 기밀) |
+| `docs/`, `README.md`, `CLAUDE.md` | `delivery-dashboard*.html` (날짜·버전 파일) |
 | | `_archive/`, `chart.min.js`, `.bkit/`, `__pycache__/` |
+| | `update_dashboard_legacy.py`, `.vercel/` |
 
 ## PDCA 문서 위치
 
@@ -148,4 +149,4 @@ NEW INPUT/
 | Analysis | `docs/03-analysis/delivery-dashboard.analysis.md` |
 | Report | `docs/04-report/delivery-dashboard.report.md` |
 
-현재 PDCA 단계: **act** (Gap 분석 완료, 개선 작업 진행 중)
+현재 PDCA 단계: **완료** (Gap 분석 Match Rate 93%, 리포트 생성 완료)

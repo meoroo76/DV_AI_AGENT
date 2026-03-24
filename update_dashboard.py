@@ -24,7 +24,8 @@ PO_26_PATH  = 'NEW INPUT/26SS_PO.xlsx'
 PO_25_PATH  = 'NEW INPUT/25SS_PO.xlsx'
 RV_26_PATH  = 'NEW INPUT/26SS입고현황.xlsx'
 RV_25_PATH  = 'NEW INPUT/25SS입고현황.xlsx'
-SCHED_PATH  = 'NEW INPUT/■ 26SS_DV_생산스케줄 취합_260205.xlsx'
+SCHED_PATH      = 'NEW INPUT/■ 26SS_DV_생산스케줄 취합_260205.xlsx'
+AI_FINAL_PATH   = 'NEW INPUT/26SS(25SS) 발주입고현황_0312.xlsx'
 HTML_PATH   = 'index.html'
 
 SEASONS     = ['25SS', '26SS']
@@ -203,6 +204,18 @@ def norm_order(v):
     return None
 
 CAT_ALIAS = {'shoes': 'acc', 'shoe': 'acc'}
+
+# AI_최종 복종코드(AC) → 구분(X) 역매핑 (X값이 이상값일 때 AC로 추정)
+_AC_TO_CAT = {
+    'RS': 'top',  'OP': 'top',  'TO': 'top',  'WS': 'top',  'TL': 'top',
+    'TS': 'top',  'KP': 'top',  'KC': 'top',  'RL': 'top',  'SS': 'top',
+    'SL': 'top',  'BR': 'top',  'HD': 'top',  'MT': 'top',
+    'LG': 'bottom', 'SK': 'bottom', 'SP': 'bottom', 'PT': 'bottom',
+    'JK': 'outer', 'VT': 'outer', 'WJ': 'outer',
+    'DH': 'down',  'DJ': 'down',  'PD': 'down',
+    'CR': 'acc',  'TG': 'acc',  'SO': 'acc',  'CP': 'acc',
+    'SC': 'acc',  'BK': 'acc',  'HT': 'acc',  'LP': 'acc',
+}
 
 def norm_cat(v):
     if v is None:
@@ -782,6 +795,217 @@ def compute_vendor(unified_rows_26):
     return result
 
 
+# ── AI_최종 시트 통합 로드 ────────────────────────────────────────────────
+def load_ai_final(path):
+    """AI_최종 시트 → (rows_25, rows_26)
+    compute_all / compute_undelivered / compute_vendor / compute_weekly_chart 호환 포맷
+    """
+    ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+
+    def find(node, tag):
+        return node.findall(f'.//{{{ns}}}{tag}')
+
+    with zipfile.ZipFile(path) as zf:
+        ss = []
+        if 'xl/sharedStrings.xml' in zf.namelist():
+            root = ET.parse(zf.open('xl/sharedStrings.xml')).getroot()
+            for si in find(root, 'si'):
+                ss.append(''.join(t.text or '' for t in si.iter(f'{{{ns}}}t')))
+
+        rel_root = ET.parse(zf.open('xl/_rels/workbook.xml.rels')).getroot()
+        rel_map = {r.get('Id'): r.get('Target') for r in rel_root}
+
+        wb_root = ET.parse(zf.open('xl/workbook.xml')).getroot()
+        sheet_file = None
+        for s in find(wb_root, 'sheet'):
+            if s.get('name') == 'AI_최종':
+                rid = (s.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+                       or s.get('r:id') or '')
+                if rid in rel_map:
+                    sheet_file = 'xl/' + rel_map[rid]
+                break
+        if not sheet_file:
+            for s in find(wb_root, 'sheet'):
+                rid = (s.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id') or '')
+                if rid in rel_map:
+                    sheet_file = 'xl/' + rel_map[rid]
+                    break
+
+        ws_root = ET.parse(zf.open(sheet_file)).getroot()
+
+    def col_idx(ref):
+        letters = re.match(r'[A-Z]+', ref).group()
+        n = 0
+        for ch in letters:
+            n = n * 26 + (ord(ch) - ord('A') + 1)
+        return n - 1
+
+    def cell_val(c):
+        t = c.get('t', '')
+        v = c.find(f'{{{ns}}}v')
+        if v is None or v.text is None:
+            return None
+        if t == 's':
+            return ss[int(v.text)]
+        try:
+            f = float(v.text)
+            return int(f) if f == int(f) else f
+        except Exception:
+            return v.text
+
+    all_rows = find(ws_root, 'row')
+    if not all_rows:
+        return [], []
+
+    headers = {}
+    for c in all_rows[0].findall(f'{{{ns}}}c'):
+        idx = col_idx(c.get('r', 'A1'))
+        val = cell_val(c)
+        if val is not None:
+            headers[idx] = str(val).strip()
+
+    rows_25, rows_26 = [], []
+
+    for row in all_rows[1:]:
+        d = {}
+        for c in row.findall(f'{{{ns}}}c'):
+            idx = col_idx(c.get('r', 'A1'))
+            if idx in headers:
+                d[headers[idx]] = cell_val(c)
+        if not d:
+            continue
+
+        season = norm_season(d.get('Season'))
+        if season not in SEASONS:
+            continue
+
+        # 복종 정규화: X(구분) 우선, 이상값이면 AC(복종코드) 기반 추정
+        x_val  = str(d.get('구분',  '') or '').strip()
+        ac_val = str(d.get('복종',  '') or '').strip()
+        cat = norm_cat(x_val)
+        if cat is None:
+            cat = _AC_TO_CAT.get(ac_val)
+        if cat not in CATS:
+            continue
+
+        order = norm_order(d.get('오더구분'))
+        if order is None:
+            continue
+
+        gender = str(d.get('성별', '') or '').strip().lower()
+
+        sty_ord = 0 if order == 'RE-ORDER' else sf(d.get('스타일수'))
+        sty_rcv = 0 if order == 'RE-ORDER' else sf(d.get('입고스타일수'))
+        qty_po  = sf(d.get('발주수량'))
+        qty_rcv = sf(d.get('입고수량'))
+        amt_po  = sf(d.get('발주금액(백만원)'))  # 실제 원 단위 (compute_all이 /1e8 처리)
+        amt_rcv = sf(d.get('입고금액(백만원)'))
+
+        unified = {
+            'Season':           season,
+            '성별':             gender,
+            '구분':             cat,
+            '복종':             ac_val,
+            '오더구분':         order,
+            '스타일수':         round(sty_ord),
+            '발주수량':         round(qty_po),
+            '발주금액(백만원)': amt_po,
+            '입고스타일수':     round(sty_rcv),
+            '입고수량':         round(qty_rcv),
+            '입고금액(백만원)': amt_rcv,
+            '발주월':           str(d.get('발주월', '') or '').strip(),
+            '_style':           str(d.get('품번',    '') or '').strip(),
+            '_vendor':          str(d.get('협력사명','') or '').strip(),
+            '_due_serial':      d.get('합의납기일'),
+            '_min_recv_date':   d.get('최초입고일'),
+            '_eta_serial':      d.get('입고예정일'),
+        }
+
+        if season == '25SS':
+            rows_25.append(unified)
+        else:
+            rows_26.append(unified)
+
+    return rows_25, rows_26
+
+
+def compute_weekly_chart_26_from_ai(rows_26, sched_map=None):
+    """AI_최종 기반 26SS 주간 차트
+    ETA: 입고예정일(_eta_serial) 우선, 없으면 sched_map 폴백
+    """
+    if sched_map is None:
+        sched_map = {}
+    result = []
+    for r in rows_26:
+        oq = sf(r.get('발주수량'))
+        rq = sf(r.get('입고수량'))
+        delivered = rq > 0
+        style = r.get('_style', '')
+
+        edd_week = None
+        if not delivered:
+            eta_s = r.get('_eta_serial')
+            if eta_s:
+                edd_week = _recv_week(eta_s)
+            else:
+                edd_week = _recv_week(sched_map.get(style))
+
+        result.append({
+            'pn':       style,
+            'cat':      r.get('구분',     ''),
+            'gender':   r.get('성별',     ''),
+            'sub':      r.get('복종',     ''),
+            'order':    r.get('오더구분', ''),
+            'oq':       round(oq),
+            'rq':       round(rq) if delivered else 0,
+            'ord_amt':  round(sf(r.get('발주금액(백만원)')) / 1e8, 4),
+            'rcv_amt':  round(sf(r.get('입고금액(백만원)')) / 1e8, 4) if delivered else 0.0,
+            'delivered': delivered,
+            'act_week':  _recv_week(r.get('_min_recv_date')) if delivered else None,
+            'edd_week':  edd_week,
+        })
+    return result
+
+
+def compute_weekly_chart_25_from_ai(rows_25):
+    """AI_최종 기반 25SS 주간 차트 (최초입고일 + 364일 오프셋)
+    분모행: (style,order) 1행 oq/ord_amt, act_week=None
+    분자행: 입고 있는 행의 최초입고일 기준 (+364일로 26SS 주차와 정렬)
+    """
+    result = []
+    for r in rows_25:
+        oq = sf(r.get('발주수량'))
+        rq = sf(r.get('입고수량'))
+        delivered = rq > 0
+
+        result.append({
+            'pn':      r.get('_style', ''),
+            'cat':     r.get('구분',   ''),
+            'gender':  r.get('성별',   ''),
+            'sub':     r.get('복종',   ''),
+            'order':   r.get('오더구분', ''),
+            'oq':      round(oq),
+            'rq':      0,
+            'ord_amt': round(sf(r.get('발주금액(백만원)')) / 1e8, 4),
+            'rcv_amt': 0,
+            'act_week': None,
+        })
+        if delivered:
+            result.append({
+                'pn':      r.get('_style', ''),
+                'cat':     r.get('구분',   ''),
+                'gender':  r.get('성별',   ''),
+                'sub':     r.get('복종',   ''),
+                'order':   r.get('오더구분', ''),
+                'oq':      0,
+                'rq':      round(rq),
+                'ord_amt': 0,
+                'rcv_amt': round(sf(r.get('입고금액(백만원)')) / 1e8, 4),
+                'act_week': _recv_week(r.get('_min_recv_date'), offset_days=364),
+            })
+    return result
+
+
 # ── 주간 입고율 추이 ──────────────────────────────────────────────────────
 def _recv_week(serial, offset_days=0):
     if serial is None:
@@ -1356,61 +1580,93 @@ def _make_offline_version(html, ref_date_str=''):
 # ── 메인 ───────────────────────────────────────────────────────────────────
 def main():
     print('=' * 55)
-    print('DUVETICA 대시보드 업데이트 (RAW 파일 모드)')
+    print('DUVETICA 대시보드 업데이트')
     print('=' * 55)
 
-    required = [SM_PATH, PO_26_PATH, PO_25_PATH, RV_26_PATH, RV_25_PATH, HTML_PATH]
-    for p in required:
-        if not os.path.exists(p):
-            print(f'❌ 파일 없음: {p}')
-            return
+    if not os.path.exists(HTML_PATH):
+        print(f'❌ 파일 없음: {HTML_PATH}')
+        return
 
-    print(f'📋 스타일마스터: {SM_PATH}')
-    sm = load_stylemaster(SM_PATH)
-    print(f'   → {len(sm)}개 스타일 등록')
+    # ── AI_최종 파일 우선 사용 ─────────────────────────────────────────────
+    if os.path.exists(AI_FINAL_PATH):
+        print(f'📋 AI_최종 파일 로드 (동일기간 기준): {AI_FINAL_PATH}')
+        rows_25, rows_26 = load_ai_final(AI_FINAL_PATH)
+        print(f'   → 25SS {len(rows_25)}행 / 26SS {len(rows_26)}행')
 
-    print(f'📊 26SS PO 로드...')
-    po_26 = load_po(PO_26_PATH, sm, '26SS')
-    print(f'   → 유효 {len(po_26)}행 (마스터 통과)')
+        from collections import Counter
+        cnt_26 = Counter(r['오더구분'] for r in rows_26)
+        cnt_25 = Counter(r['오더구분'] for r in rows_25)
+        print(f'   26SS: MAIN={cnt_26["MAIN"]} / SPOT={cnt_26["SPOT"]} / RE-ORDER={cnt_26["RE-ORDER"]}')
+        print(f'   25SS: MAIN={cnt_25["MAIN"]} / SPOT={cnt_25["SPOT"]} / RE-ORDER={cnt_25["RE-ORDER"]}')
 
-    print(f'📊 25SS PO 로드...')
-    po_25 = load_po(PO_25_PATH, sm, '25SS')
-    print(f'   → 유효 {len(po_25)}행 (마스터 통과)')
+        print('⚙️  집계 중...')
+        d = compute_all(rows_26 + rows_25)
+        d['undelivered'] = compute_undelivered(rows_26)
+        d['vendor']      = compute_vendor(rows_26)
 
-    print(f'📦 26SS 입고현황 로드...')
-    rv_26 = load_recv(RV_26_PATH)
-    print(f'   → {len(rv_26)}개 그룹발주번호')
+        # 생산스케줄: 입고예정일 없는 행의 edd_week 보완용
+        sched_map = {}
+        if os.path.exists(SCHED_PATH):
+            print(f'📅 생산스케줄 로드: {SCHED_PATH}')
+            sched_map = load_schedule(SCHED_PATH)
+            print(f'   → {len(sched_map)}개 스타일 ETA 등록')
 
-    print(f'📦 25SS 입고현황 로드...')
-    rv_25     = load_recv(RV_25_PATH)
-    rv_25_raw = load_recv_raw(RV_25_PATH)
-    print(f'   → {len(rv_25)}개 그룹발주번호 / {len(rv_25_raw)}행 raw')
+        d['weekly26'] = compute_weekly_chart_26_from_ai(rows_26, sched_map)
+        d['weekly25'] = compute_weekly_chart_25_from_ai(rows_25)
 
-    print('⚙️  데이터 통합 및 집계 중...')
-    rows_26 = build_unified_rows(po_26, rv_26, sm, '26SS')
-    rows_25 = build_unified_rows(po_25, rv_25, sm, '25SS')
-
-    from collections import Counter
-    cnt_26 = Counter(r['오더구분'] for r in rows_26)
-    cnt_25 = Counter(r['오더구분'] for r in rows_25)
-    print(f'   26SS: MAIN={cnt_26["MAIN"]} / SPOT={cnt_26["SPOT"]} / RE-ORDER={cnt_26["RE-ORDER"]}')
-    print(f'   25SS: MAIN={cnt_25["MAIN"]} / SPOT={cnt_25["SPOT"]} / RE-ORDER={cnt_25["RE-ORDER"]}')
-
-    d = compute_all(rows_26 + rows_25)
-    d['undelivered'] = compute_undelivered(rows_26)
-    d['vendor']      = compute_vendor(rows_26)
-
-    # 생산스케줄 로드 (26SS 예측 edd_week 용)
-    sched_map = {}
-    if os.path.exists(SCHED_PATH):
-        print(f'📅 생산스케줄 로드: {SCHED_PATH}')
-        sched_map = load_schedule(SCHED_PATH)
-        print(f'   → {len(sched_map)}개 스타일 ETA 등록')
+    # ── 기존 방식 (개별 PO/입고 파일) ─────────────────────────────────────
     else:
-        print(f'  ⚠️  생산스케줄 파일 없음 (예측선 미표시): {SCHED_PATH}')
+        required = [SM_PATH, PO_26_PATH, PO_25_PATH, RV_26_PATH, RV_25_PATH]
+        for p in required:
+            if not os.path.exists(p):
+                print(f'❌ 파일 없음: {p}')
+                return
 
-    d['weekly26']    = compute_weekly_chart(rows_26, sched_map)
-    d['weekly25']    = compute_weekly_chart_25(po_25, rv_25_raw, sm)
+        print(f'📋 스타일마스터: {SM_PATH}')
+        sm = load_stylemaster(SM_PATH)
+        print(f'   → {len(sm)}개 스타일 등록')
+
+        print(f'📊 26SS PO 로드...')
+        po_26 = load_po(PO_26_PATH, sm, '26SS')
+        print(f'   → 유효 {len(po_26)}행 (마스터 통과)')
+
+        print(f'📊 25SS PO 로드...')
+        po_25 = load_po(PO_25_PATH, sm, '25SS')
+        print(f'   → 유효 {len(po_25)}행 (마스터 통과)')
+
+        print(f'📦 26SS 입고현황 로드...')
+        rv_26 = load_recv(RV_26_PATH)
+        print(f'   → {len(rv_26)}개 그룹발주번호')
+
+        print(f'📦 25SS 입고현황 로드...')
+        rv_25     = load_recv(RV_25_PATH)
+        rv_25_raw = load_recv_raw(RV_25_PATH)
+        print(f'   → {len(rv_25)}개 그룹발주번호 / {len(rv_25_raw)}행 raw')
+
+        print('⚙️  데이터 통합 및 집계 중...')
+        rows_26 = build_unified_rows(po_26, rv_26, sm, '26SS')
+        rows_25 = build_unified_rows(po_25, rv_25, sm, '25SS')
+
+        from collections import Counter
+        cnt_26 = Counter(r['오더구분'] for r in rows_26)
+        cnt_25 = Counter(r['오더구분'] for r in rows_25)
+        print(f'   26SS: MAIN={cnt_26["MAIN"]} / SPOT={cnt_26["SPOT"]} / RE-ORDER={cnt_26["RE-ORDER"]}')
+        print(f'   25SS: MAIN={cnt_25["MAIN"]} / SPOT={cnt_25["SPOT"]} / RE-ORDER={cnt_25["RE-ORDER"]}')
+
+        d = compute_all(rows_26 + rows_25)
+        d['undelivered'] = compute_undelivered(rows_26)
+        d['vendor']      = compute_vendor(rows_26)
+
+        sched_map = {}
+        if os.path.exists(SCHED_PATH):
+            print(f'📅 생산스케줄 로드: {SCHED_PATH}')
+            sched_map = load_schedule(SCHED_PATH)
+            print(f'   → {len(sched_map)}개 스타일 ETA 등록')
+        else:
+            print(f'  ⚠️  생산스케줄 파일 없음 (예측선 미표시): {SCHED_PATH}')
+
+        d['weekly26'] = compute_weekly_chart(rows_26, sched_map)
+        d['weekly25'] = compute_weekly_chart_25(po_25, rv_25_raw, sm)
 
     print(f'   미입고 {len(d["undelivered"])}건 / 협력사 {len(d["vendor"])}개')
 
