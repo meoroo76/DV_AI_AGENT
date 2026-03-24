@@ -39,30 +39,54 @@ Excel 파일 교체(NEW INPUT/) → python update_dashboard.py → git add index
 
 ## 아키텍처
 
-### 데이터 흐름
+### 데이터 흐름 및 main() 이중 모드
+
+`main()`은 `AI_FINAL_PATH` 존재 여부에 따라 두 가지 모드로 동작한다:
+
 ```
+[AI_최종 모드 — 우선]
 NEW INPUT/
-  24fw-26ss_stylemaster_v8.csv       ─┐
-  26SS_PO.xlsx / 25SS_PO.xlsx        ─┤→ update_dashboard.py → index.html  (Git/Vercel 배포)
-  26SS입고현황.xlsx / 25SS입고현황.xlsx   ─┤                    → delivery-dashboard-offline.html  (로컬 전용, gitignore)
-  ■ 26SS_DV_생산스케줄 취합_*.xlsx    ─┘
+  26SS(25SS) 발주입고현황_*.xlsx (AI_최종 시트)  ─→ load_ai_final() → rows_25, rows_26
+  ■ 26SS_DV_생산스케줄 취합_*.xlsx               ─→ load_schedule() → sched_map
+                                                 ─→ update_dashboard.py → index.html
+
+[레거시 모드 — AI_최종 파일 없을 때만]
+NEW INPUT/
+  24fw-26ss_stylemaster_v8.csv  ─┐
+  26SS_PO.xlsx / 25SS_PO.xlsx   ─┤→ build_unified_rows() → rows_25, rows_26
+  26SS입고현황.xlsx / 25SS입고현황.xlsx ─┘
 ```
+
+### 이미지 추출 파이프라인 (3단계 우선순위)
+
+미입고 테이블 품번 이미지는 `main()` 내에서 순서대로 적용·덮어씀:
+1. `extract_sched_images()` — 스케줄 파일에서 추출 (base, ~177개)
+2. `extract_ai_final_images()` — AI_최종 BA열 이미지로 덮어씀 (높은 우선순위)
+3. `download_cdn_images()` — CDN(`static-dashff.fnf.co.kr`)에서 나머지 다운로드 (**내부망 전용**)
 
 ### update_dashboard.py 핵심 함수
 | 함수 | 역할 |
 |------|------|
 | `load_stylemaster(path)` | 스타일마스터 CSV 로드 → `{style_id: {season, gender, category, detail1}}` |
-| `parse_xlsx(path, fill_cols)` | xlsx 직접 파싱 (openpyxl 불필요), `fill_cols`로 병합셀 fill-down 처리 |
-| `load_po(path, sm, season)` | PO xlsx 로드 → 스타일마스터 참조로 성별·복종 보강 |
+| `parse_xlsx(path, fill_cols)` | xlsx 직접 파싱 (openpyxl 불필요), **첫 번째 시트만** 읽음, `fill_cols`로 병합셀 fill-down 처리 |
+| `load_ai_final(path)` | `AI_최종` 시트 → `(rows_25, rows_26)` — compute_all 호환 포맷, AI_최종 모드의 primary 소스 |
+| `load_history_map(path)` | `AI_최종` 시트 `스타일 히스토리` 열 → `{품번: 히스토리 텍스트}` (헤더명 동적 탐색) |
+| `load_po(path, sm, season)` | PO xlsx 로드 → 스타일마스터 참조로 성별·복종 보강 (레거시 모드 전용) |
 | `load_schedule(path)` | 생산스케줄 xlsx → `{스타일코드: [{입고예정일, 수량}]}` |
-| `load_recv(path)` / `load_recv_raw(path)` | 입고현황 xlsx 로드 |
-| `build_unified_rows(po_rows, recv_map, sm, season)` | PO+입고현황 결합 → 통합 행 생성 |
+| `load_recv(path)` / `load_recv_raw(path)` | 입고현황 xlsx 로드 (레거시 모드 전용) |
+| `build_unified_rows(po_rows, recv_map, sm, season)` | PO+입고현황 결합 → 통합 행 생성 (레거시 모드 전용) |
 | `classify(style, po_no, date_serial, season, sm, ...)` | 스타일·오더번호 기준으로 MAIN/SPOT/RE-ORDER 분류 |
 | `compute_all(rows)` | KPI·복종별·오더구분별·월별·성별 집계 |
 | `compute_undelivered(unified_rows_26)` | 26SS 미입고 행 추출 (발주수량 > 입고수량) |
 | `compute_vendor(unified_rows_26)` | 26SS 협력사별 수량 기준 입고 진도율 집계 |
-| `compute_weekly_chart(unified_rows_26, sched_map)` | 26SS 주차별 입고 실적 vs 스케줄 차트 데이터 |
-| `compute_weekly_chart_25(po_rows_25, recv_raw_25, sm)` | 25SS 주차별 차트 데이터 |
+| `compute_weekly_chart_26_from_ai(rows_26, sched_map)` | AI_최종 기반 26SS 주차별 실적 vs 스케줄 |
+| `compute_weekly_chart_25_from_ai(rows_25)` | AI_최종 기반 25SS 주차별 차트 |
+| `compute_weekly_chart(unified_rows_26, sched_map)` | 레거시 모드 26SS 주차별 차트 |
+| `compute_weekly_chart_25(po_rows_25, recv_raw_25, sm)` | 레거시 모드 25SS 주차별 차트 |
+| `build_style_best_color(sched_path)` | 스케줄 파일 F열 컬러 정보 → `{스타일코드: 대표색}` |
+| `extract_sched_images(sched_path, style_best_color)` | 스케줄 파일 이미지 추출 — `rdRichValueWebImage.xml` → `valueMetadata` fallback 순 |
+| `extract_ai_final_images(path)` | AI_최종 파일 BA열 이미지 추출 → `{품번: base64}` |
+| `download_cdn_images(pn_list)` | CDN URL(`{pn}_가로.png`)로 이미지 다운로드 (내부망 전용) |
 | `gen_kpi_cards(d)` | KPI 카드 HTML 생성 |
 | `gen_*_section(d)` | JS 데이터 블록 문자열 생성 |
 | `update_html(d, ref_date_str)` | 마커 기반으로 HTML 내 데이터 섹션 교체 |
@@ -76,6 +100,7 @@ NEW INPUT/
 - `// ═══ ORDER_METRIC_BEGIN ═══` … `// ═══ ORDER_METRIC_END ═══` — 오더구분별 JS 데이터
 - `// ═══ MONTH_DATA_BEGIN ═══` … `// ═══ MONTH_DATA_END ═══` — 월별 JS 데이터
 - `// ═══ UNDELIVERED_BEGIN ═══` … `// ═══ UNDELIVERED_END ═══` — 26SS 미입고 리스트 JS 데이터
+- `// ═══ IMG_DATA_BEGIN ═══` … `// ═══ IMG_DATA_END ═══` — 품번 이미지 맵 JS 데이터 (base64)
 - `// ═══ VENDOR_BEGIN ═══` … `// ═══ VENDOR_END ═══` — 협력사별 진도율 JS 데이터
 - `// ═══ WEEKLY_DATA_BEGIN ═══` … `// ═══ WEEKLY_DATA_END ═══` — 주차별 입고 차트 JS 데이터
 
@@ -97,7 +122,7 @@ NEW INPUT/
 | `26SS_PO.xlsx` / `25SS_PO.xlsx` | 발주 데이터 — `스타일코드`, `협력사`, 발주수량, 발주금액 등 |
 | `26SS입고현황.xlsx` / `25SS입고현황.xlsx` | 입고현황 데이터 |
 | `■ 26SS_DV_생산스케줄 취합_*.xlsx` | 26SS 생산 스케줄 (주차별 입고예정) — 파일명 변경 시 `update_dashboard.py` 28번째 줄 `SCHED_PATH` 상수를 직접 수정 |
-| `26SS(25SS) 발주입고현황_0312.xlsx` | 레거시 통합 파일 — `update_dashboard_legacy.py` 전용, 현재 스크립트에서는 미사용 |
+| `26SS(25SS) 발주입고현황_0312.xlsx` | **AI_최종 모드 primary 소스** — `AI_최종` 시트에 25SS·26SS 통합 데이터 + 품번 이미지(BA열) + 스타일 히스토리(T열) 포함. 파일명 변경 시 `AI_FINAL_PATH` 상수 수정. `update_dashboard_legacy.py`에서도 사용 |
 | `PR정보.xlsx`, `25SS_INBOUND_FINAL.xlsx` | 현재 스크립트 미사용 — 참고용 보조 데이터 |
 
 ### 오더 분류 로직
@@ -116,6 +141,13 @@ NEW INPUT/
 - PO 파일: `그룹PO No` 컬럼
 - 입고현황 파일: `그룹발주번호` 컬럼
 - 두 컬럼 값이 일치해야 입고 데이터가 연결됨
+
+### Excel richData 이미지 파싱 (extract_sched_images)
+`=IMAGE(URL)` 함수 이미지는 xlsx 내부에 두 가지 경로로 저장될 수 있다:
+- **경로 A** (`rdRichValueWebImage.xml`): `<webImageSrd>` → rId → URL (하이퍼링크 rel) 또는 캐시 이미지. `futureMetadata` 블록으로 셀과 연결.
+- **경로 B** (신버전): `valueMetadata` 블록의 `rc` 속성(`vm="..."`)으로 연결. `rdrichvalue.xml` 레코드에서 추출. `extract_sched_images()`는 경로 A 실패 시 경로 B로 fallback.
+
+`parse_xlsx()`는 시트 데이터만 읽으며 이 richData 구조를 처리하지 않음 — 이미지 추출은 반드시 `extract_sched_images()` / `extract_ai_final_images()` 전용 함수 사용.
 
 ## 파일 역할 구분
 

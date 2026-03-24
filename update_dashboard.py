@@ -1480,6 +1480,19 @@ def extract_sched_images(sched_path, style_best_color):
                         if rvb is not None:
                             bk_to_i[bk_idx] = int(rvb.get('i'))
 
+                value_meta = meta_root.find(f'{{{ns}}}valueMetadata')
+                bk_to_rc_v = {}
+                if value_meta is not None:
+                    for bk_idx, bk in enumerate(value_meta.findall(f'{{{ns}}}bk')):
+                        rc = bk.find(f'{{{ns}}}rc')
+                        if rc is not None and rc.get('v'):
+                            bk_to_rc_v[bk_idx] = int(rc.get('v'))
+
+                rvs = None
+                if 'xl/richData/rdrichvalue.xml' in namelist:
+                    rv_root2 = ET.parse(zf.open('xl/richData/rdrichvalue.xml')).getroot()
+                    rvs = rv_root2.findall(f'{{{ns_xlrd}}}rv')
+
                 # workbook → sheet4 (● 2026 02 05) 파일 경로
                 wb      = ET.parse(zf.open('xl/workbook.xml')).getroot()
                 wb_rels = ET.parse(zf.open('xl/_rels/workbook.xml.rels')).getroot()
@@ -1512,10 +1525,26 @@ def extract_sched_images(sched_path, style_best_color):
                             continue
                         bk_idx = int(vm_str) - 1
                         i_val  = bk_to_i.get(bk_idx)
-                        if i_val is None:
+                        
+                        rel_id = None
+                        if i_val is not None:
+                            rel_id = idx_rid.get(i_val)
+                            
+                        if not rel_id and bk_idx in bk_to_rc_v and rvs is not None:
+                            rc_v = bk_to_rc_v[bk_idx]
+                            if rc_v < len(rvs):
+                                rv = rvs[rc_v]
+                                for v_el in rv.findall(f'{{{ns_xlrd}}}v'):
+                                    val = int(v_el.text) if v_el.text and v_el.text.isdigit() else -1
+                                    cand_rid = idx_rid.get(val)
+                                    if cand_rid and rid_img2.get(cand_rid, ''):
+                                        rel_id = cand_rid
+                                        break
+                                        
+                        if not rel_id:
                             continue
-                        rid      = idx_rid.get(i_val)
-                        img_file = rid_img2.get(rid, '') if rid else ''
+                            
+                        img_file = rid_img2.get(rel_id, '')
                         img_path = 'xl/media/' + img_file
                         if img_file and img_path in namelist:
                             result[pn] = 'data:image/png;base64,' + \
