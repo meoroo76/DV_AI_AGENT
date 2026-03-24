@@ -733,7 +733,7 @@ def compute_undelivered(unified_rows_26):
             'oq':      round(sf(r.get('발주수량'))),
             'rq':      0,
             'agree':   to_date_str(r.get('_due_serial')),
-            'edd':     '',
+            'edd':     to_date_str(r.get('_eta_serial')),
             'history': '',
         })
     result.sort(key=lambda x: (x['agree'] or '9999-99-99', x['pn']))
