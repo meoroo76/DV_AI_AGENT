@@ -1403,110 +1403,202 @@ def build_style_best_color(sched_path):
 
 
 def extract_sched_images(sched_path, style_best_color):
-    """스케줄 xlsx 드로잉 PNG 추출 → {style: 'data:image/png;base64,...'}
-    대표 칼라(style_best_color)와 일치하는 이미지 우선, 없으면 비블랙 우선.
-    """
-    ns   = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
-    xdr  = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
-    a_ns = 'http://schemas.openxmlformats.org/drawingml/2006/main'
-    r_ns = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    """스케줄 xlsx → {품번: 'data:image/png;base64,...'}
 
-    def _col_idx(ref):
-        letters = re.match(r'[A-Z]+', ref).group()
-        n = 0
-        for ch in letters: n = n * 26 + (ord(ch) - ord('A') + 1)
-        return n - 1
+    추출 우선순위:
+      1) rdRichValueWebImage.xml — =IMAGE(URL) 캐시, URL에서 품번 추출 (가장 많음)
+      2) richValueRel.xml + metadata — G열 vm 속성 기반 (보조)
+      3) drawing1.xml floating 이미지 (폴백)
+    """
+    ns      = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    ns_r    = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    ns_rvr  = 'http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel'
+    ns_xlrd = 'http://schemas.microsoft.com/office/spreadsheetml/2017/richdata'
+    ns_wi   = 'http://schemas.microsoft.com/office/spreadsheetml/2020/richdatawebimage'
+    xdr     = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
+    a_ns    = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 
     result = {}
     try:
         with zipfile.ZipFile(sched_path) as zf:
-            ss = []
-            if 'xl/sharedStrings.xml' in zf.namelist():
-                root = ET.parse(zf.open('xl/sharedStrings.xml')).getroot()
-                for si in root.findall(f'.//{{{ns}}}si'):
-                    ss.append(''.join(t.text or '' for t in si.iter(f'{{{ns}}}t')))
-
-            wb   = ET.parse(zf.open('xl/workbook.xml')).getroot()
-            rels = ET.parse(zf.open('xl/_rels/workbook.xml.rels')).getroot()
-            rel_map = {r.get('Id'): r.get('Target') for r in rels}
-
-            sheet_file = None
-            for s in wb.findall(f'.//{{{ns}}}sheet'):
-                if s.get('name') == '● 2026 02 05':
-                    rid = s.get(f'{{{r_ns}}}id') or ''
-                    sheet_file = 'xl/' + rel_map[rid]
-                    break
-            if not sheet_file:
-                return result
-
-            ws = ET.parse(zf.open(sheet_file)).getroot()
-
-            # 드로잉 rels 및 drawing XML 로드
-            rels_d  = ET.parse(zf.open('xl/drawings/_rels/drawing1.xml.rels')).getroot()
-            rid_to_img = {r.get('Id'): r.get('Target', '') for r in rels_d}
-            drawing = ET.parse(zf.open('xl/drawings/drawing1.xml')).getroot()
-
-            # 워크시트 F열(index 5) → 스타일 breakpoints (병합셀 fill-down 대응)
-            IMG_COL_SCHED = 6  # G열 (IMAGE 헤더)
-
-            def _cell_val(c):
-                t = c.get('t', ''); v = c.find(f'{{{ns}}}v')
-                if v is None or v.text is None: return None
-                if t == 's': return ss[int(v.text)]
-                try:
-                    f = float(v.text); return int(f) if f == int(f) else f
-                except: return v.text
-
-            style_breakpoints = []  # [(row_num, style)] 오름차순
-            for row in ws.findall(f'.//{{{ns}}}row'):
-                rn = int(row.get('r', 0))
-                for c in row.findall(f'{{{ns}}}c'):
-                    if _col_idx(c.get('r', 'A1')) == 5:  # F열
-                        val = str(_cell_val(c) or '').strip()
-                        if val:
-                            style_breakpoints.append((rn, val))
-                        break
-            style_breakpoints.sort()
-
-            def style_for_row(r):
-                found = ''
-                for row_num, sty in style_breakpoints:
-                    if row_num <= r: found = sty
-                    else: break
-                return found
-
-            # 행별 후보 이미지 수집 → G열(IMG_COL_SCHED) 최근접 선택
-            row_candidates = defaultdict(list)
             namelist = zf.namelist()
 
-            for anchor in drawing.findall(f'{{{xdr}}}twoCellAnchor'):
-                frm = anchor.find(f'{{{xdr}}}from')
-                if frm is None: continue
-                col_el = frm.find(f'{{{xdr}}}col')
-                row_el = frm.find(f'{{{xdr}}}row')
-                if col_el is None or row_el is None: continue
+            # ── 방법 1: rdRichValueWebImage URL → 품번 추출 ──────────────────
+            if ('xl/richData/rdRichValueWebImage.xml' in namelist and
+                    'xl/richData/_rels/rdRichValueWebImage.xml.rels' in namelist):
+                wi_rels = ET.parse(zf.open('xl/richData/_rels/rdRichValueWebImage.xml.rels')).getroot()
+                rid_url = {r.get('Id'): r.get('Target')
+                           for r in wi_rels if 'hyperlink' in r.get('Type', '')}
+                rid_img = {r.get('Id'): r.get('Target', '').replace('../media/', '')
+                           for r in wi_rels if 'image' in r.get('Type', '')}
 
-                anchor_col = int(col_el.text)
-                excel_row  = int(row_el.text) + 1
+                wi_root = ET.parse(zf.open('xl/richData/rdRichValueWebImage.xml')).getroot()
+                for webimg in wi_root.findall(f'{{{ns_wi}}}webImageSrd'):
+                    addr = webimg.find(f'{{{ns_wi}}}address')
+                    blip = webimg.find(f'{{{ns_wi}}}blip')
+                    if addr is None or blip is None:
+                        continue
+                    url      = rid_url.get(addr.get(f'{{{ns_r}}}id', ''), '')
+                    img_file = rid_img.get(blip.get(f'{{{ns_r}}}id', ''), '')
+                    if not url or not img_file:
+                        continue
+                    # URL 패턴: .../VDPT13161_가로.png 또는 .../VUMT15361.png
+                    m = re.search(r'/([A-Z]{2}[A-Z0-9]+)(?:_[^/]*)?\.png', url)
+                    if m:
+                        pn = m.group(1)
+                        img_path = 'xl/media/' + img_file
+                        if pn not in result and img_path in namelist:
+                            result[pn] = 'data:image/png;base64,' + \
+                                         base64.b64encode(zf.read(img_path)).decode()
 
-                style = style_for_row(excel_row)
-                if not style: continue
+            # ── 방법 2: G열 vm → metadata → richValueRel ────────────────────
+            if ('xl/richData/richValueRel.xml' in namelist and
+                    'xl/richData/_rels/richValueRel.xml.rels' in namelist and
+                    'xl/metadata.xml' in namelist):
+                # sharedStrings
+                ss = []
+                if 'xl/sharedStrings.xml' in namelist:
+                    root = ET.parse(zf.open('xl/sharedStrings.xml')).getroot()
+                    for si in root.findall(f'.//{{{ns}}}si'):
+                        ss.append(''.join(t.text or '' for t in si.iter(f'{{{ns}}}t')))
 
-                pic = anchor.find(f'{{{xdr}}}pic')
-                if pic is None: continue
-                blip = pic.find(f'.//{{{a_ns}}}blip')
-                if blip is None: continue
-                rid = blip.get(f'{{{r_ns}}}embed', '')
-                img_rel = rid_to_img.get(rid, '')
-                img_path = 'xl/media/' + img_rel.split('/')[-1] if img_rel else ''
-                if img_path not in namelist: continue
+                # richValueRel 인덱스 → rId
+                rv_root  = ET.parse(zf.open('xl/richData/richValueRel.xml')).getroot()
+                idx_rid  = {i: rel.get(f'{{{ns_r}}}id')
+                            for i, rel in enumerate(rv_root.findall(f'{{{ns_rvr}}}rel'))}
+                rv_rels  = ET.parse(zf.open('xl/richData/_rels/richValueRel.xml.rels')).getroot()
+                rid_img2 = {r.get('Id'): r.get('Target', '').replace('../media/', '')
+                            for r in rv_rels}
 
-                row_candidates[excel_row].append((anchor_col, style, zf.read(img_path)))
+                # metadata bk 인덱스 → richValueRel 인덱스
+                meta_root   = ET.parse(zf.open('xl/metadata.xml')).getroot()
+                future_meta = meta_root.find(f'{{{ns}}}futureMetadata')
+                bk_to_i = {}
+                if future_meta is not None:
+                    for bk_idx, bk in enumerate(future_meta.findall(f'{{{ns}}}bk')):
+                        rvb = bk.find(f'.//{{{ns_xlrd}}}rvb')
+                        if rvb is not None:
+                            bk_to_i[bk_idx] = int(rvb.get('i'))
 
-        # 행별로 G열(IMG_COL_SCHED)에 가장 가까운 이미지 선택
-        for excel_row, candidates in row_candidates.items():
-            chosen = min(candidates, key=lambda x: abs(x[0] - IMG_COL_SCHED))
-            result[chosen[1]] = 'data:image/png;base64,' + base64.b64encode(chosen[2]).decode()
+                # workbook → sheet4 (● 2026 02 05) 파일 경로
+                wb      = ET.parse(zf.open('xl/workbook.xml')).getroot()
+                wb_rels = ET.parse(zf.open('xl/_rels/workbook.xml.rels')).getroot()
+                rel_map = {r.get('Id'): r.get('Target') for r in wb_rels}
+                sheet_file = None
+                for s in wb.findall(f'.//{{{ns}}}sheet'):
+                    if s.get('name') == '● 2026 02 05':
+                        rid = s.get(f'{{{ns_r}}}id', '')
+                        tgt = rel_map.get(rid, '')
+                        sheet_file = 'xl/' + tgt if tgt else None
+                        break
+
+                if sheet_file and sheet_file in namelist:
+                    sheet_raw = zf.read(sheet_file).decode('utf-8')
+                    # F열(품번) 행 매핑
+                    row_to_pn = {}
+                    for ref, idx in re.findall(
+                            r'<c r="(F\d+)"[^>]*t="s"[^>]*><v>(\d+)</v>', sheet_raw):
+                        row = int(re.search(r'(\d+)', ref).group(1))
+                        val = ss[int(idx)] if int(idx) < len(ss) else ''
+                        if val and val != 'STYLE NO.':
+                            row_to_pn[row] = val
+
+                    # G열 vm → 이미지 매핑 (방법1에서 미처리 품번만)
+                    for ref, vm_str in re.findall(
+                            r'<c r="(G\d+)"[^>]*vm="(\d+)"', sheet_raw):
+                        row = int(re.search(r'(\d+)', ref).group(1))
+                        pn  = row_to_pn.get(row, '')
+                        if not pn or pn in result:
+                            continue
+                        bk_idx = int(vm_str) - 1
+                        i_val  = bk_to_i.get(bk_idx)
+                        if i_val is None:
+                            continue
+                        rid      = idx_rid.get(i_val)
+                        img_file = rid_img2.get(rid, '') if rid else ''
+                        img_path = 'xl/media/' + img_file
+                        if img_file and img_path in namelist:
+                            result[pn] = 'data:image/png;base64,' + \
+                                         base64.b64encode(zf.read(img_path)).decode()
+
+            # ── 방법 3: drawing1.xml floating 이미지 (폴백) ──────────────────
+            if ('xl/drawings/drawing1.xml' in namelist and
+                    'xl/drawings/_rels/drawing1.xml.rels' in namelist):
+                # sharedStrings (방법2에서 미로드 시)
+                if 'ss' not in dir():
+                    ss = []
+                    if 'xl/sharedStrings.xml' in namelist:
+                        root = ET.parse(zf.open('xl/sharedStrings.xml')).getroot()
+                        for si in root.findall(f'.//{{{ns}}}si'):
+                            ss.append(''.join(t.text or '' for t in si.iter(f'{{{ns}}}t')))
+
+                rels_d     = ET.parse(zf.open('xl/drawings/_rels/drawing1.xml.rels')).getroot()
+                rid_to_img = {r.get('Id'): r.get('Target', '') for r in rels_d}
+                drawing    = ET.parse(zf.open('xl/drawings/drawing1.xml')).getroot()
+
+                # sheet4 F열 breakpoints (방법2와 독립적으로 재파싱)
+                wb      = ET.parse(zf.open('xl/workbook.xml')).getroot()
+                wb_rels = ET.parse(zf.open('xl/_rels/workbook.xml.rels')).getroot()
+                rel_map3 = {r.get('Id'): r.get('Target') for r in wb_rels}
+                sheet_file3 = None
+                for s in wb.findall(f'.//{{{ns}}}sheet'):
+                    if s.get('name') == '● 2026 02 05':
+                        rid = s.get(f'{{{ns_r}}}id', '')
+                        tgt = rel_map3.get(rid, '')
+                        sheet_file3 = 'xl/' + tgt if tgt else None
+                        break
+
+                style_bp = []
+                if sheet_file3 and sheet_file3 in namelist:
+                    ws = ET.parse(zf.open(sheet_file3)).getroot()
+                    for row in ws.findall(f'.//{{{ns}}}row'):
+                        rn = int(row.get('r', 0))
+                        for c in row.findall(f'{{{ns}}}c'):
+                            ref = c.get('r', '')
+                            if ref and re.match(r'F\d+$', ref):
+                                t  = c.get('t', '')
+                                v  = c.find(f'{{{ns}}}v')
+                                if v is not None and v.text is not None:
+                                    val = ss[int(v.text)] if t == 's' and int(v.text) < len(ss) else ''
+                                    if val and val != 'STYLE NO.':
+                                        style_bp.append((rn, val))
+                                break
+                style_bp.sort()
+
+                def _style_for_row(r):
+                    found = ''
+                    for rn, sty in style_bp:
+                        if rn <= r: found = sty
+                        else: break
+                    return found
+
+                IMG_COL_SCHED = 6  # G열
+                row_cands = defaultdict(list)
+                for anchor in drawing.findall(f'{{{xdr}}}twoCellAnchor'):
+                    frm = anchor.find(f'{{{xdr}}}from')
+                    if frm is None: continue
+                    col_el = frm.find(f'{{{xdr}}}col')
+                    row_el = frm.find(f'{{{xdr}}}row')
+                    if col_el is None or row_el is None: continue
+                    anchor_col = int(col_el.text)
+                    excel_row  = int(row_el.text) + 1
+                    sty = _style_for_row(excel_row)
+                    if not sty or sty in result: continue
+                    pic = anchor.find(f'{{{xdr}}}pic')
+                    if pic is None: continue
+                    blip = pic.find(f'.//{{{a_ns}}}blip')
+                    if blip is None: continue
+                    rid      = blip.get(f'{{{a_ns}}}embed', '') or blip.get(f'{{{ns_r}}}embed', '')
+                    img_rel  = rid_to_img.get(rid, '')
+                    img_path = 'xl/media/' + img_rel.split('/')[-1] if img_rel else ''
+                    if img_path not in namelist: continue
+                    row_cands[excel_row].append((anchor_col, sty, zf.read(img_path)))
+
+                for excel_row, cands in row_cands.items():
+                    chosen = min(cands, key=lambda x: abs(x[0] - IMG_COL_SCHED))
+                    if chosen[1] not in result:
+                        result[chosen[1]] = 'data:image/png;base64,' + \
+                                            base64.b64encode(chosen[2]).decode()
 
     except Exception as e:
         print(f'  ⚠️  extract_sched_images 실패: {e}')
