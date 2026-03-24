@@ -2700,8 +2700,26 @@
                   const v26 = items[0]?.parsed.y ?? null;
                   const v25 = items[1]?.parsed.y ?? null;
                   if (v26 === null || v25 === null) return [];
-                  const d = (v26 - v25).toFixed(1);
-                  return [` 전년대비: ${d > 0 ? '+' : ''}${d}%p`];
+                  const p = points[items[0].dataIndex];
+                  const diffPct = (v26 - v25).toFixed(1);
+                  const pctLine = ` 전년대비: ${diffPct > 0 ? '+' : ''}${diffPct}%p`;
+                  let diffAbs = 0, unit = '', absLine = '';
+                  if (wkMetric === 'styles') {
+                    diffAbs = (p?.pns26 ?? 0) - (p?.pns25 ?? 0);
+                    unit = 'sty';
+                    const arrow = diffAbs >= 0 ? '↑' : '↓';
+                    absLine = ` ${arrow} ${Math.abs(diffAbs).toLocaleString()}${unit} ${diffAbs >= 0 ? '증가' : '감소'}`;
+                  } else if (wkMetric === 'qty') {
+                    diffAbs = (p?.rq26 ?? 0) - (p?.rq25 ?? 0);
+                    unit = 'pcs';
+                    const arrow = diffAbs >= 0 ? '↑' : '↓';
+                    absLine = ` ${arrow} ${Math.abs(diffAbs).toLocaleString()}${unit} ${diffAbs >= 0 ? '증가' : '감소'}`;
+                  } else if (wkMetric === 'amt') {
+                    const diff억 = ((p?.amt26 ?? 0) - (p?.amt25 ?? 0)) / 1e8;
+                    const arrow = diff억 >= 0 ? '↑' : '↓';
+                    absLine = ` ${arrow} ${Math.abs(diff억).toFixed(1)}억 ${diff억 >= 0 ? '증가' : '감소'}`;
+                  }
+                  return [pctLine, absLine];
                 }
               }
             },
