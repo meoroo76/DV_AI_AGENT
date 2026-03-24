@@ -9,6 +9,7 @@ update_dashboard.py — NEW INPUT/ 폴더의 RAW 파일로 대시보드 HTML 자
 필요 파일: NEW INPUT/ 폴더의 5개 파일
 """
 
+import base64
 import csv
 import zipfile
 import xml.etree.ElementTree as ET
@@ -1178,8 +1179,191 @@ def gen_month_data_section(d):
     ]
     return '\n'.join(lines)
 
+def build_style_best_color(sched_path):
+    """스케줄 F/I/J → {style: best_color}
+    비블랙(BK 비시작) 중 발주수량 최대 칼라 우선, 없으면 블랙 중 최대.
+    """
+    ns  = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    r_ns = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+
+    def _col_idx(ref):
+        letters = re.match(r'[A-Z]+', ref).group()
+        n = 0
+        for ch in letters: n = n * 26 + (ord(ch) - ord('A') + 1)
+        return n - 1
+
+    try:
+        with zipfile.ZipFile(sched_path) as zf:
+            ss = []
+            if 'xl/sharedStrings.xml' in zf.namelist():
+                root = ET.parse(zf.open('xl/sharedStrings.xml')).getroot()
+                for si in root.findall(f'.//{{{ns}}}si'):
+                    ss.append(''.join(t.text or '' for t in si.iter(f'{{{ns}}}t')))
+
+            wb   = ET.parse(zf.open('xl/workbook.xml')).getroot()
+            rels = ET.parse(zf.open('xl/_rels/workbook.xml.rels')).getroot()
+            rel_map = {r.get('Id'): r.get('Target') for r in rels}
+
+            sheet_file = None
+            for s in wb.findall(f'.//{{{ns}}}sheet'):
+                if s.get('name') == '● 2026 02 05':
+                    rid = s.get(f'{{{r_ns}}}id') or ''
+                    sheet_file = 'xl/' + rel_map[rid]
+                    break
+            if not sheet_file:
+                return {}
+
+            ws = ET.parse(zf.open(sheet_file)).getroot()
+
+        def _cell_val(c):
+            t = c.get('t', ''); v = c.find(f'{{{ns}}}v')
+            if v is None or v.text is None: return None
+            if t == 's': return ss[int(v.text)]
+            try:
+                f = float(v.text); return int(f) if f == int(f) else f
+            except: return v.text
+
+        style_color_pcs = defaultdict(lambda: defaultdict(float))
+        for row in ws.findall(f'.//{{{ns}}}row'):
+            row_num = int(row.get('r', 0))
+            if row_num <= 7:   # 헤더(7행) 이하 스킵
+                continue
+            d = {}
+            for c in row.findall(f'{{{ns}}}c'):
+                idx = _col_idx(c.get('r', 'A1'))
+                if idx in (5, 8, 9):
+                    d[idx] = _cell_val(c)
+            style = str(d.get(5) or '').strip()
+            color = str(d.get(8) or '').strip()
+            pcs   = sf(d.get(9))
+            if style and color:
+                style_color_pcs[style][color] += pcs
+
+        result = {}
+        for style, cp in style_color_pcs.items():
+            non_bk = {c: q for c, q in cp.items() if not c.upper().startswith('BK')}
+            result[style] = max(non_bk, key=non_bk.get) if non_bk else max(cp, key=cp.get)
+        return result
+
+    except Exception as e:
+        print(f'  ⚠️  build_style_best_color 실패: {e}')
+        return {}
+
+
+def extract_sched_images(sched_path, style_best_color):
+    """스케줄 xlsx 드로잉 PNG 추출 → {style: 'data:image/png;base64,...'}
+    대표 칼라(style_best_color)와 일치하는 이미지 우선, 없으면 비블랙 우선.
+    """
+    ns   = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    xdr  = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
+    a_ns = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+    r_ns = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+
+    def _col_idx(ref):
+        letters = re.match(r'[A-Z]+', ref).group()
+        n = 0
+        for ch in letters: n = n * 26 + (ord(ch) - ord('A') + 1)
+        return n - 1
+
+    result = {}
+    try:
+        with zipfile.ZipFile(sched_path) as zf:
+            ss = []
+            if 'xl/sharedStrings.xml' in zf.namelist():
+                root = ET.parse(zf.open('xl/sharedStrings.xml')).getroot()
+                for si in root.findall(f'.//{{{ns}}}si'):
+                    ss.append(''.join(t.text or '' for t in si.iter(f'{{{ns}}}t')))
+
+            wb   = ET.parse(zf.open('xl/workbook.xml')).getroot()
+            rels = ET.parse(zf.open('xl/_rels/workbook.xml.rels')).getroot()
+            rel_map = {r.get('Id'): r.get('Target') for r in rels}
+
+            sheet_file = None
+            for s in wb.findall(f'.//{{{ns}}}sheet'):
+                if s.get('name') == '● 2026 02 05':
+                    rid = s.get(f'{{{r_ns}}}id') or ''
+                    sheet_file = 'xl/' + rel_map[rid]
+                    break
+            if not sheet_file:
+                return result
+
+            ws = ET.parse(zf.open(sheet_file)).getroot()
+
+            # 드로잉 rels 및 drawing XML 로드
+            rels_d  = ET.parse(zf.open('xl/drawings/_rels/drawing1.xml.rels')).getroot()
+            rid_to_img = {r.get('Id'): r.get('Target', '') for r in rels_d}
+            drawing = ET.parse(zf.open('xl/drawings/drawing1.xml')).getroot()
+
+            # 워크시트 행 데이터 (row_num → (style, color))
+            def _cell_val(c):
+                t = c.get('t', ''); v = c.find(f'{{{ns}}}v')
+                if v is None or v.text is None: return None
+                if t == 's': return ss[int(v.text)]
+                try:
+                    f = float(v.text); return int(f) if f == int(f) else f
+                except: return v.text
+
+            row_sc = {}
+            for row in ws.findall(f'.//{{{ns}}}row'):
+                rn = int(row.get('r', 0))
+                style_v = color_v = None
+                for c in row.findall(f'{{{ns}}}c'):
+                    idx = _col_idx(c.get('r', 'A1'))
+                    if idx == 5: style_v = _cell_val(c)
+                    if idx == 8: color_v = _cell_val(c)
+                row_sc[rn] = (str(style_v or '').strip(), str(color_v or '').strip())
+
+            # 앵커 → {style: [(color, img_bytes)]}
+            style_imgs = defaultdict(list)
+            namelist = zf.namelist()
+
+            for anchor in drawing.findall(f'{{{xdr}}}twoCellAnchor'):
+                frm = anchor.find(f'{{{xdr}}}from')
+                if frm is None: continue
+                excel_row = int(frm.find(f'{{{xdr}}}row').text) + 1
+
+                style, color = row_sc.get(excel_row, ('', ''))
+                if not style: continue
+
+                pic = anchor.find(f'{{{xdr}}}pic')
+                if pic is None: continue
+                blip = pic.find(f'.//{{{a_ns}}}blip')
+                if blip is None: continue
+                rid = blip.get(f'{{{r_ns}}}embed', '')
+                img_rel = rid_to_img.get(rid, '')
+                # '../media/imageN.png' → 'xl/media/imageN.png'
+                img_path = 'xl/media/' + img_rel.split('/')[-1] if img_rel else ''
+                if img_path not in namelist:
+                    continue
+
+                style_imgs[style].append((color, zf.read(img_path)))
+
+        # 스타일별 최적 이미지 선택
+        for style, imgs in style_imgs.items():
+            best_color = style_best_color.get(style, '')
+            # 1순위: best_color 일치
+            chosen = next((b for c, b in imgs if c == best_color), None)
+            # 2순위: 비블랙 첫 번째
+            if chosen is None:
+                chosen = next((b for c, b in imgs if not c.upper().startswith('BK')), None)
+            # 3순위: 아무거나
+            if chosen is None and imgs:
+                chosen = imgs[0][1]
+            if chosen:
+                result[style] = 'data:image/png;base64,' + base64.b64encode(chosen).decode()
+
+    except Exception as e:
+        print(f'  ⚠️  extract_sched_images 실패: {e}')
+
+    return result
+
+
 def gen_undelivered_section(data):
     return f'  const UNDELIVERED_DATA = {js(data)};'
+
+
+def gen_img_map_section(img_map):
+    return f'  const IMG_DATA = {js(img_map)};'
 
 def gen_vendor_section(data):
     return f'  const VENDOR_DATA = {js(data)};'
@@ -1522,6 +1706,11 @@ def update_html(d, ref_date_str):
         gen_undelivered_section(d['undelivered']))
 
     html = replace_between(html,
+        '// ═══ IMG_DATA_BEGIN ═══',
+        '// ═══ IMG_DATA_END ═══',
+        gen_img_map_section(d.get('img_map', {})))
+
+    html = replace_between(html,
         '// ═══ VENDOR_BEGIN ═══',
         '// ═══ VENDOR_END ═══',
         gen_vendor_section(d['vendor']))
@@ -1613,6 +1802,16 @@ def main():
 
         d['weekly26'] = compute_weekly_chart_26_from_ai(rows_26, sched_map)
         d['weekly25'] = compute_weekly_chart_25_from_ai(rows_25)
+
+        # 미입고 이미지 맵 (스케줄 파일 드로잉 추출)
+        if os.path.exists(SCHED_PATH):
+            print(f'🖼️  품번 이미지 추출 중...')
+            style_best_color = build_style_best_color(SCHED_PATH)
+            img_map = extract_sched_images(SCHED_PATH, style_best_color)
+            d['img_map'] = img_map
+            print(f'   → {len(img_map)}개 품번 이미지 (fallback용)')
+        else:
+            d['img_map'] = {}
 
     # ── 기존 방식 (개별 PO/입고 파일) ─────────────────────────────────────
     else:
