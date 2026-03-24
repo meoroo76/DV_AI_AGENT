@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ET
 import json
 import re
 import os
+import urllib.request
 from datetime import datetime, timedelta
 from collections import defaultdict
 
@@ -290,6 +291,140 @@ def load_po(path, sm, season):
         r['_season'] = season
 
     return valid
+
+
+# ── CDN 이미지 다운로드 ────────────────────────────────────────────────────
+CDN_IMG_URL = 'https://static-dashff.fnf.co.kr/image/src/{pn}_가로.png'
+CDN_TIMEOUT  = 5  # 초
+
+def download_cdn_images(pn_list):
+    """품번 리스트 → CDN에서 이미지 다운로드 → {품번: 'data:image/png;base64,...'}
+    실패한 품번은 조용히 건너뜀.
+    """
+    result = {}
+    ok = fail = 0
+    for pn in pn_list:
+        if not pn:
+            continue
+        url = CDN_IMG_URL.format(pn=pn)
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=CDN_TIMEOUT) as resp:
+                data = resp.read()
+            # 응답이 HTML(오류 페이지)이면 스킵
+            if data[:4] in (b'\x89PNG', b'\xff\xd8\xff\xe0', b'\xff\xd8\xff\xe1'):
+                result[pn] = 'data:image/png;base64,' + base64.b64encode(data).decode()
+                ok += 1
+            else:
+                fail += 1
+        except Exception:
+            fail += 1
+    print(f'   → CDN 다운로드: 성공 {ok}개 / 실패(없음) {fail}개')
+    return result
+
+
+# ── 스타일 히스토리 맵 (● 2026 02 05 시트 AH열) ──────────────────────────
+def load_history_map(path):
+    """'AI_최종' 시트 → {품번: 스타일히스토리 텍스트} 매핑
+    열 위치는 헤더명으로 동적 탐색 (열 변경에 강건):
+      - 품번 열    : 헤더 '품번'
+      - 히스토리 열: 헤더 '스타일히스토리'
+    """
+    SHEET_NAME  = 'AI_최종'
+    HDR_PN      = '품번'
+    HDR_HISTORY = '스타일 히스토리'
+    ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+
+    def find(node, tag):
+        return node.findall(f'.//{{{ns}}}{tag}')
+
+    try:
+        with zipfile.ZipFile(path) as zf:
+            ss = []
+            if 'xl/sharedStrings.xml' in zf.namelist():
+                root = ET.parse(zf.open('xl/sharedStrings.xml')).getroot()
+                for si in find(root, 'si'):
+                    ss.append(''.join(t.text or '' for t in si.iter(f'{{{ns}}}t')))
+
+            rel_root = ET.parse(zf.open('xl/_rels/workbook.xml.rels')).getroot()
+            rel_map = {r.get('Id'): r.get('Target') for r in rel_root}
+
+            wb_root = ET.parse(zf.open('xl/workbook.xml')).getroot()
+            sheet_file = None
+            for s in find(wb_root, 'sheet'):
+                if s.get('name') == SHEET_NAME:
+                    rid = (s.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id') or '')
+                    if rid in rel_map:
+                        sheet_file = 'xl/' + rel_map[rid]
+                    break
+
+            if not sheet_file:
+                print(f'  ⚠️  시트 없음: {SHEET_NAME}')
+                return {}
+
+            ws_root = ET.parse(zf.open(sheet_file)).getroot()
+
+        def col_idx(ref):
+            letters = re.match(r'[A-Z]+', ref).group()
+            n = 0
+            for ch in letters:
+                n = n * 26 + (ord(ch) - ord('A') + 1)
+            return n - 1
+
+        def cell_val(c):
+            t = c.get('t', '')
+            v = c.find(f'{{{ns}}}v')
+            if v is None or v.text is None:
+                return None
+            if t == 's':
+                return ss[int(v.text)]
+            try:
+                f = float(v.text)
+                return int(f) if f == int(f) else f
+            except Exception:
+                return v.text
+
+        all_rows = find(ws_root, 'row')
+        if not all_rows:
+            return {}
+
+        # 헤더 행에서 품번·스타일히스토리 열 인덱스 동적 탐색
+        pn_col_idx   = None
+        hist_col_idx = None
+        for c in all_rows[0].findall(f'{{{ns}}}c'):
+            idx = col_idx(c.get('r', 'A1'))
+            val = str(cell_val(c) or '').strip()
+            if val == HDR_PN:
+                pn_col_idx = idx
+            elif val == HDR_HISTORY:
+                hist_col_idx = idx
+
+        if pn_col_idx is None:
+            print(f'  ⚠️  {SHEET_NAME} 시트에서 "{HDR_PN}" 열을 찾지 못했습니다.')
+            return {}
+        if hist_col_idx is None:
+            print(f'  ⚠️  {SHEET_NAME} 시트에서 "{HDR_HISTORY}" 열을 찾지 못했습니다.')
+            return {}
+
+        result = {}
+        for row in all_rows[1:]:
+            pn_val   = None
+            hist_val = None
+            for c in row.findall(f'{{{ns}}}c'):
+                idx = col_idx(c.get('r', 'A1'))
+                if idx == pn_col_idx:
+                    pn_val = cell_val(c)
+                elif idx == hist_col_idx:
+                    hist_val = cell_val(c)
+            if pn_val:
+                pn_str = str(pn_val).strip()
+                if pn_str and hist_val is not None:
+                    result[pn_str] = str(hist_val).strip()
+        return result
+
+    except Exception as e:
+        print(f'  ⚠️  히스토리 맵 로드 실패: {e}')
+        return {}
 
 
 # ── 생산스케줄 로드 (26SS 입고 예정일) ────────────────────────────────────
@@ -734,7 +869,7 @@ def compute_undelivered(unified_rows_26):
             'rq':      0,
             'agree':   to_date_str(r.get('_due_serial')),
             'edd':     to_date_str(r.get('_eta_serial')),
-            'history': '',
+            'history': r.get('_history', ''),
         })
     result.sort(key=lambda x: (x['agree'] or '9999-99-99', x['pn']))
     return result
@@ -869,10 +1004,13 @@ def load_ai_final(path):
 
     for row in all_rows[1:]:
         d = {}
+        p_col_val = None  # P열(index 15) 합의납기일 — 위치 기반 직접 읽기
         for c in row.findall(f'{{{ns}}}c'):
             idx = col_idx(c.get('r', 'A1'))
             if idx in headers:
                 d[headers[idx]] = cell_val(c)
+            if idx == 15:  # P열
+                p_col_val = cell_val(c)
         if not d:
             continue
 
@@ -917,7 +1055,7 @@ def load_ai_final(path):
             '발주월':           str(d.get('발주월', '') or '').strip(),
             '_style':           str(d.get('품번',    '') or '').strip(),
             '_vendor':          str(d.get('협력사명','') or '').strip(),
-            '_due_serial':      d.get('합의납기일'),
+            '_due_serial':      p_col_val,  # AI_최종 P열 값 (합의납기일)
             '_min_recv_date':   d.get('최초입고일'),
             '_eta_serial':      d.get('입고예정일'),
         }
@@ -1372,6 +1510,153 @@ def extract_sched_images(sched_path, style_best_color):
     return result
 
 
+def extract_ai_final_images(path):
+    """AI_최종 파일 '● 2026 02 05' 시트 → {품번: base64_image}
+    품번: F열(index 5), 이미지 앵커: BA열(index 52) 기준 필터링
+    드로잉 파일은 시트 rels에서 동적으로 탐색.
+    """
+    SHEET_NAME = '● 2026 02 05'
+    PN_COL  = 5   # F열 (0-based)
+    IMG_COL = 52  # BA열 (0-based)
+
+    ns   = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    xdr  = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
+    a_ns = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+    r_ns = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    pkg_r = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing'
+
+    def _col_idx(ref):
+        letters = re.match(r'[A-Z]+', ref).group()
+        n = 0
+        for ch in letters: n = n * 26 + (ord(ch) - ord('A') + 1)
+        return n - 1
+
+    result = {}
+    try:
+        with zipfile.ZipFile(path) as zf:
+            namelist = zf.namelist()
+
+            ss = []
+            if 'xl/sharedStrings.xml' in namelist:
+                root = ET.parse(zf.open('xl/sharedStrings.xml')).getroot()
+                for si in root.findall(f'.//{{{ns}}}si'):
+                    ss.append(''.join(t.text or '' for t in si.iter(f'{{{ns}}}t')))
+
+            wb   = ET.parse(zf.open('xl/workbook.xml')).getroot()
+            rels = ET.parse(zf.open('xl/_rels/workbook.xml.rels')).getroot()
+            rel_map = {r.get('Id'): r.get('Target') for r in rels}
+
+            # "● 2026 02 05" 시트 파일 탐색
+            sheet_file = None
+            for s in wb.findall(f'.//{{{ns}}}sheet'):
+                if s.get('name') == SHEET_NAME:
+                    rid = s.get(f'{{{r_ns}}}id') or ''
+                    if rid in rel_map:
+                        sheet_file = 'xl/' + rel_map[rid]
+                    break
+            if not sheet_file:
+                print(f'  ⚠️  시트 없음: {SHEET_NAME} (이미지 추출 불가)')
+                return result
+
+            # 시트 rels에서 드로잉 파일 동적 탐색
+            sheet_fname = sheet_file.split('/')[-1]
+            ws_rels_path = f'xl/worksheets/_rels/{sheet_fname}.rels'
+            drawing_path = None
+            if ws_rels_path in namelist:
+                ws_rels = ET.parse(zf.open(ws_rels_path)).getroot()
+                for r in ws_rels:
+                    if r.get('Type', '').endswith('/drawing') or pkg_r in r.get('Type', ''):
+                        tgt = r.get('Target', '')
+                        drawing_path = 'xl/drawings/' + tgt.split('/')[-1]
+                        break
+
+            if not drawing_path or drawing_path not in namelist:
+                print(f'  ⚠️  드로잉 파일 없음 (이미지 추출 불가)')
+                return result
+
+            drw_fname = drawing_path.split('/')[-1]
+            drw_rels_path = f'xl/drawings/_rels/{drw_fname}.rels'
+            if drw_rels_path not in namelist:
+                return result
+
+            rels_d = ET.parse(zf.open(drw_rels_path)).getroot()
+            rid_to_img = {r.get('Id'): r.get('Target', '') for r in rels_d}
+            drawing = ET.parse(zf.open(drawing_path)).getroot()
+
+            ws = ET.parse(zf.open(sheet_file)).getroot()
+
+            def _cell_val(c):
+                t = c.get('t', ''); v = c.find(f'{{{ns}}}v')
+                if v is None or v.text is None: return None
+                if t == 's': return ss[int(v.text)]
+                try:
+                    f = float(v.text); return int(f) if f == int(f) else f
+                except: return v.text
+
+            # 행 번호 → 품번 맵 (F열, 병합셀 대응)
+            # 병합셀은 첫 번째 행에만 값이 존재 → fill-down 방식으로 조회
+            pn_breakpoints = []  # [(row_num, pn)] 오름차순
+            for row in ws.findall(f'.//{{{ns}}}row'):
+                rn = int(row.get('r', 0))
+                for c in row.findall(f'{{{ns}}}c'):
+                    if _col_idx(c.get('r', 'A1')) == PN_COL:
+                        val = _cell_val(c)
+                        if val:
+                            pn_breakpoints.append((rn, str(val).strip()))
+                        break
+            pn_breakpoints.sort()
+
+            def pn_for_row(r):
+                """이미지 앵커 행 이하에서 가장 가까운 품번 반환 (fill-down)"""
+                found = ''
+                for row_num, pn in pn_breakpoints:
+                    if row_num <= r:
+                        found = pn
+                    else:
+                        break
+                return found
+
+            # 드로잉 앵커 순회 — 행별 후보 수집 후 BA열(IMG_COL) 최근접 선택
+            # (Excel 이미지 앵커의 from.col은 실제 배치 열과 ±몇 열 차이 발생 가능)
+            row_candidates = defaultdict(list)
+
+            for anchor in drawing.findall(f'{{{xdr}}}twoCellAnchor'):
+                frm = anchor.find(f'{{{xdr}}}from')
+                if frm is None: continue
+                col_el = frm.find(f'{{{xdr}}}col')
+                row_el = frm.find(f'{{{xdr}}}row')
+                if col_el is None or row_el is None: continue
+
+                anchor_col = int(col_el.text)
+                excel_row  = int(row_el.text) + 1  # 0-based → 1-based
+
+                pn = pn_for_row(excel_row)
+                if not pn: continue
+
+                pic = anchor.find(f'{{{xdr}}}pic')
+                if pic is None: continue
+                blip = pic.find(f'.//{{{a_ns}}}blip')
+                if blip is None: continue
+                rid = blip.get(f'{{{r_ns}}}embed', '')
+                img_rel = rid_to_img.get(rid, '')
+                img_path = 'xl/media/' + img_rel.split('/')[-1] if img_rel else ''
+                if img_path not in namelist: continue
+
+                row_candidates[excel_row].append((anchor_col, zf.read(img_path)))
+
+            # 행별로 BA열(IMG_COL=52)에 from.col이 가장 가까운 이미지 선택
+            for excel_row, candidates in row_candidates.items():
+                pn = pn_for_row(excel_row)
+                if not pn: continue
+                chosen_bytes = min(candidates, key=lambda x: abs(x[0] - IMG_COL))[1]
+                result[pn] = 'data:image/png;base64,' + base64.b64encode(chosen_bytes).decode()
+
+    except Exception as e:
+        print(f'  ⚠️  extract_ai_final_images 실패: {e}')
+
+    return result
+
+
 def gen_undelivered_section(data):
     return f'  const UNDELIVERED_DATA = {js(data)};'
 
@@ -1817,15 +2102,22 @@ def main():
         d['weekly26'] = compute_weekly_chart_26_from_ai(rows_26, sched_map)
         d['weekly25'] = compute_weekly_chart_25_from_ai(rows_25)
 
-        # 미입고 이미지 맵 (스케줄 파일 드로잉 추출)
+        # 미입고 이미지 맵
+        # 1단계: 스케줄 파일 드로잉 (fallback)
+        img_map = {}
         if os.path.exists(SCHED_PATH):
-            print(f'🖼️  품번 이미지 추출 중...')
+            print(f'🖼️  품번 이미지 추출 중 (스케줄 파일)...')
             style_best_color = build_style_best_color(SCHED_PATH)
             img_map = extract_sched_images(SCHED_PATH, style_best_color)
-            d['img_map'] = img_map
-            print(f'   → {len(img_map)}개 품번 이미지 (fallback용)')
-        else:
-            d['img_map'] = {}
+            print(f'   → {len(img_map)}개 품번 이미지 (스케줄 파일)')
+
+        # 2단계: AI_최종 파일 BA열 이미지로 덮어씀 (우선순위 높음)
+        print(f'🖼️  품번 이미지 추출 중 (AI_최종 파일 BA열)...')
+        ai_imgs = extract_ai_final_images(AI_FINAL_PATH)
+        if ai_imgs:
+            img_map.update(ai_imgs)
+            print(f'   → {len(ai_imgs)}개 품번 이미지 (AI_최종 BA열, 우선 적용)')
+        d['img_map'] = img_map
 
     # ── 기존 방식 (개별 PO/입고 파일) ─────────────────────────────────────
     else:
@@ -1880,6 +2172,24 @@ def main():
 
         d['weekly26'] = compute_weekly_chart(rows_26, sched_map)
         d['weekly25'] = compute_weekly_chart_25(po_25, rv_25_raw, sm)
+
+    # ── 스타일 히스토리 (● 2026 02 05 시트 AH열) ──────────────────────────
+    if os.path.exists(AI_FINAL_PATH):
+        print(f'📝 스타일 히스토리 로드 중...')
+        history_map = load_history_map(AI_FINAL_PATH)
+        if history_map:
+            for r in d['undelivered']:
+                pn = r.get('pn', '')
+                if pn in history_map:
+                    r['history'] = history_map[pn]
+            print(f'   → {len(history_map)}개 품번 히스토리 등록')
+
+    # ── CDN 이미지 다운로드 (미입고 품번 전체) ────────────────────────────
+    print(f'🌐 CDN 이미지 다운로드 중...')
+    pn_list = [r['pn'] for r in d['undelivered'] if r.get('pn')]
+    cdn_imgs = download_cdn_images(pn_list)
+    if cdn_imgs:
+        d.setdefault('img_map', {}).update(cdn_imgs)
 
     print(f'   미입고 {len(d["undelivered"])}건 / 협력사 {len(d["vendor"])}개')
 

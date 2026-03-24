@@ -96,8 +96,9 @@ NEW INPUT/
 | `24fw-26ss_stylemaster_v8.csv` | 스타일마스터 — `style_id`, `season`, `gender`, `category`, `detail1` 컬럼 |
 | `26SS_PO.xlsx` / `25SS_PO.xlsx` | 발주 데이터 — `스타일코드`, `협력사`, 발주수량, 발주금액 등 |
 | `26SS입고현황.xlsx` / `25SS입고현황.xlsx` | 입고현황 데이터 |
-| `■ 26SS_DV_생산스케줄 취합_*.xlsx` | 26SS 생산 스케줄 (주차별 입고예정) — 파일명 변경 시 `update_dashboard.py` 27번째 줄 `SCHED_PATH` 상수를 직접 수정 |
+| `■ 26SS_DV_생산스케줄 취합_*.xlsx` | 26SS 생산 스케줄 (주차별 입고예정) — 파일명 변경 시 `update_dashboard.py` 28번째 줄 `SCHED_PATH` 상수를 직접 수정 |
 | `26SS(25SS) 발주입고현황_0312.xlsx` | 레거시 통합 파일 — `update_dashboard_legacy.py` 전용, 현재 스크립트에서는 미사용 |
+| `PR정보.xlsx`, `25SS_INBOUND_FINAL.xlsx` | 현재 스크립트 미사용 — 참고용 보조 데이터 |
 
 ### 오더 분류 로직
 `classify()` 함수가 스타일코드·오더번호·발주일 기준으로 MAIN/SPOT/RE-ORDER를 판정.
@@ -125,6 +126,7 @@ NEW INPUT/
 | `업데이트_실행.bat` | Windows 더블클릭 실행용 |
 | `_archive/` | 1차 개발 버전 로컬 백업 (gitignore) |
 | `NEW INPUT/` | 원본 Excel/CSV 데이터 (gitignore — 절대 커밋 금지) |
+| `delivery-dashboard*.html` | gitignore 대상 — index.html 전환 전 레거시 파일. 로컬에 잔존하지만 Git 추적 안 됨 |
 
 ## 버전 관리 규칙
 
@@ -148,5 +150,6 @@ NEW INPUT/
 | Design | `docs/02-design/features/delivery-dashboard.design.md` |
 | Analysis | `docs/03-analysis/delivery-dashboard.analysis.md` |
 | Report | `docs/04-report/delivery-dashboard.report.md` |
+| 데이터 지식 그래프 | `docs/knowledge-graph.md` — 엔티티·관계·조인 키 시각화 |
 
 현재 PDCA 단계: **완료** (Gap 분석 Match Rate 93%, 리포트 생성 완료)
