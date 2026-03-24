@@ -419,7 +419,9 @@ def load_history_map(path):
             if pn_val:
                 pn_str = str(pn_val).strip()
                 if pn_str and hist_val is not None:
-                    result[pn_str] = str(hist_val).strip()
+                    hist_str = str(hist_val).strip()
+                    if hist_str and hist_str != '0':
+                        result[pn_str] = hist_str
         return result
 
     except Exception as e:
