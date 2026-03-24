@@ -1004,6 +1004,20 @@ def compute_weekly_chart_25_from_ai(rows_25):
                 'rcv_amt': round(sf(r.get('입고금액(백만원)')) / 1e8, 4),
                 'act_week': _recv_week(r.get('_min_recv_date'), offset_days=364),
             })
+        elif r.get('_eta_serial'):
+            # 25SS 확정 실적: 미입고지만 R열 입고예정일이 있는 경우
+            result.append({
+                'pn':      r.get('_style', ''),
+                'cat':     r.get('구분',   ''),
+                'gender':  r.get('성별',   ''),
+                'sub':     r.get('복종',   ''),
+                'order':   r.get('오더구분', ''),
+                'oq':      0,
+                'rq':      round(oq),
+                'ord_amt': 0,
+                'rcv_amt': round(sf(r.get('발주금액(백만원)')) / 1e8, 4),
+                'act_week': _recv_week(r.get('_eta_serial'), offset_days=364),
+            })
     return result
 
 
