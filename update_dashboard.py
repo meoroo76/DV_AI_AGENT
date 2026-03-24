@@ -1446,7 +1446,9 @@ def extract_sched_images(sched_path, style_best_color):
             rid_to_img = {r.get('Id'): r.get('Target', '') for r in rels_d}
             drawing = ET.parse(zf.open('xl/drawings/drawing1.xml')).getroot()
 
-            # 워크시트 행 데이터 (row_num → (style, color))
+            # 워크시트 F열(index 5) → 스타일 breakpoints (병합셀 fill-down 대응)
+            IMG_COL_SCHED = 6  # G열 (IMAGE 헤더)
+
             def _cell_val(c):
                 t = c.get('t', ''); v = c.find(f'{{{ns}}}v')
                 if v is None or v.text is None: return None
@@ -1455,26 +1457,39 @@ def extract_sched_images(sched_path, style_best_color):
                     f = float(v.text); return int(f) if f == int(f) else f
                 except: return v.text
 
-            row_sc = {}
+            style_breakpoints = []  # [(row_num, style)] 오름차순
             for row in ws.findall(f'.//{{{ns}}}row'):
                 rn = int(row.get('r', 0))
-                style_v = color_v = None
                 for c in row.findall(f'{{{ns}}}c'):
-                    idx = _col_idx(c.get('r', 'A1'))
-                    if idx == 5: style_v = _cell_val(c)
-                    if idx == 8: color_v = _cell_val(c)
-                row_sc[rn] = (str(style_v or '').strip(), str(color_v or '').strip())
+                    if _col_idx(c.get('r', 'A1')) == 5:  # F열
+                        val = str(_cell_val(c) or '').strip()
+                        if val:
+                            style_breakpoints.append((rn, val))
+                        break
+            style_breakpoints.sort()
 
-            # 앵커 → {style: [(color, img_bytes)]}
-            style_imgs = defaultdict(list)
+            def style_for_row(r):
+                found = ''
+                for row_num, sty in style_breakpoints:
+                    if row_num <= r: found = sty
+                    else: break
+                return found
+
+            # 행별 후보 이미지 수집 → G열(IMG_COL_SCHED) 최근접 선택
+            row_candidates = defaultdict(list)
             namelist = zf.namelist()
 
             for anchor in drawing.findall(f'{{{xdr}}}twoCellAnchor'):
                 frm = anchor.find(f'{{{xdr}}}from')
                 if frm is None: continue
-                excel_row = int(frm.find(f'{{{xdr}}}row').text) + 1
+                col_el = frm.find(f'{{{xdr}}}col')
+                row_el = frm.find(f'{{{xdr}}}row')
+                if col_el is None or row_el is None: continue
 
-                style, color = row_sc.get(excel_row, ('', ''))
+                anchor_col = int(col_el.text)
+                excel_row  = int(row_el.text) + 1
+
+                style = style_for_row(excel_row)
                 if not style: continue
 
                 pic = anchor.find(f'{{{xdr}}}pic')
@@ -1483,26 +1498,15 @@ def extract_sched_images(sched_path, style_best_color):
                 if blip is None: continue
                 rid = blip.get(f'{{{r_ns}}}embed', '')
                 img_rel = rid_to_img.get(rid, '')
-                # '../media/imageN.png' → 'xl/media/imageN.png'
                 img_path = 'xl/media/' + img_rel.split('/')[-1] if img_rel else ''
-                if img_path not in namelist:
-                    continue
+                if img_path not in namelist: continue
 
-                style_imgs[style].append((color, zf.read(img_path)))
+                row_candidates[excel_row].append((anchor_col, style, zf.read(img_path)))
 
-        # 스타일별 최적 이미지 선택
-        for style, imgs in style_imgs.items():
-            best_color = style_best_color.get(style, '')
-            # 1순위: best_color 일치
-            chosen = next((b for c, b in imgs if c == best_color), None)
-            # 2순위: 비블랙 첫 번째
-            if chosen is None:
-                chosen = next((b for c, b in imgs if not c.upper().startswith('BK')), None)
-            # 3순위: 아무거나
-            if chosen is None and imgs:
-                chosen = imgs[0][1]
-            if chosen:
-                result[style] = 'data:image/png;base64,' + base64.b64encode(chosen).decode()
+        # 행별로 G열(IMG_COL_SCHED)에 가장 가까운 이미지 선택
+        for excel_row, candidates in row_candidates.items():
+            chosen = min(candidates, key=lambda x: abs(x[0] - IMG_COL_SCHED))
+            result[chosen[1]] = 'data:image/png;base64,' + base64.b64encode(chosen[2]).decode()
 
     except Exception as e:
         print(f'  ⚠️  extract_sched_images 실패: {e}')
