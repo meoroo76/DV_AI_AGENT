@@ -1784,6 +1784,123 @@ def extract_ai_final_images(path):
     return result
 
 
+def extract_imagemap_images(sched_path):
+    """스케줄 파일 '이미지맵' 시트 B열(품번) + C열(=IMAGE()) → {품번: 'data:image/png;base64,...'}
+    valueMetadata → rdrichvalue(v[0]) → richValueRel → image file 체인으로 추출.
+    """
+    result = {}
+    try:
+        with zipfile.ZipFile(sched_path) as z:
+            files = set(z.namelist())
+
+            # 이미지맵 시트 파일 경로 확인
+            wb = ET.fromstring(z.read('xl/workbook.xml'))
+            wb_ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+            rels_el = ET.fromstring(z.read('xl/_rels/workbook.xml.rels'))
+            pkg_ns = 'http://schemas.openxmlformats.org/package/2006/relationships'
+            wb_rel_map = {r.get('Id'): r.get('Target') for r in rels_el}
+            sheet_path = None
+            for s in wb.findall(f'.//{{{wb_ns}}}sheet'):
+                if s.get('name') == '이미지맵':
+                    rid = s.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+                    sheet_path = 'xl/' + wb_rel_map.get(rid, '')
+                    break
+            if not sheet_path or sheet_path not in files:
+                print('  ⚠️  이미지맵 시트를 찾을 수 없음')
+                return result
+
+            # 품번(B열) / vm값(C열) 수집
+            ws = ET.fromstring(z.read(sheet_path))
+            xns = wb_ns
+            sst = ET.fromstring(z.read('xl/sharedStrings.xml'))
+            strings = [''.join(t.text or '' for t in si.iter(f'{{{xns}}}t'))
+                       for si in sst.findall(f'{{{xns}}}si')]
+            row_to_pn, row_to_vm = {}, {}
+            for row_el in ws.findall(f'.//{{{xns}}}row'):
+                r_idx = int(row_el.get('r', 0))
+                for c_el in row_el.findall(f'{{{xns}}}c'):
+                    ref = c_el.get('r', '')
+                    col = re.sub(r'\d', '', ref)
+                    t, v_el = c_el.get('t', ''), c_el.find(f'{{{xns}}}v')
+                    if col == 'B' and v_el is not None:
+                        val = strings[int(v_el.text)] if t == 's' else v_el.text
+                        if val:
+                            row_to_pn[r_idx] = str(val).strip()
+                    if col == 'C':
+                        vm = c_el.get('vm')
+                        if vm:
+                            row_to_vm[r_idx] = int(vm) - 1  # 1-based → 0-based
+
+            meta = ET.fromstring(z.read('xl/metadata.xml'))
+            bk_to_rc, bk_to_i = {}, {}
+            for bk_idx, bk in enumerate(meta.findall(f'.//{{{xns}}}valueMetadata/{{{xns}}}bk')):
+                rc_el = bk.find(f'{{{xns}}}rc')
+                if rc_el is not None: bk_to_rc[bk_idx] = int(rc_el.get('v', -1))
+            for bk_idx, bk in enumerate(meta.findall(f'.//{{{xns}}}futureMetadata/{{{xns}}}bk')):
+                rvb = bk.find(f'.//{{http://schemas.microsoft.com/office/spreadsheetml/2017/richdata}}rvb')
+                if rvb is not None: bk_to_i[bk_idx] = int(rvb.get('i', -1))
+
+            rdv_ns = 'http://schemas.microsoft.com/office/spreadsheetml/2017/richdata'
+            rdv = ET.fromstring(z.read('xl/richData/rdrichvalue.xml'))
+            records = rdv.findall(f'{{{rdv_ns}}}rv')
+            rec_to_rvr_idx, rec_schema = {}, {}
+            for i, rv in enumerate(records):
+                vs = [v.text for v in rv.findall(f'{{{rdv_ns}}}v')]
+                if vs:
+                    rec_to_rvr_idx[i] = int(vs[0])
+                    rec_schema[i] = int(rv.get('s', '0'))
+
+            rvr_ns = 'http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel'
+            r_ns   = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+            rvr = ET.fromstring(z.read('xl/richData/richValueRel.xml'))
+            rvr_idx_to_rid = {i: e.get(f'{{{r_ns}}}id') for i, e in enumerate(rvr.findall(f'{{{rvr_ns}}}rel'))}
+
+            rvr_rels = ET.fromstring(z.read('xl/richData/_rels/richValueRel.xml.rels'))
+            rid_to_file = {r.get('Id'): r.get('Target').replace('../', 'xl/') for r in rvr_rels.findall(f'{{{pkg_ns}}}Relationship')}
+
+            wi_ns = 'http://schemas.microsoft.com/office/spreadsheetml/2020/richdatawebimage'
+            web_img_rids, wi_rid_to_tgt = [], {}
+            if 'xl/richData/rdRichValueWebImage.xml' in files:
+                wi = ET.fromstring(z.read('xl/richData/rdRichValueWebImage.xml'))
+                web_img_rids = [w.find(f'{{{wi_ns}}}blip').get(f'{{{r_ns}}}id') if w.find(f'{{{wi_ns}}}blip') is not None else None for w in wi.findall(f'{{{wi_ns}}}webImageSrd')]
+                if 'xl/richData/_rels/rdRichValueWebImage.xml.rels' in files:
+                    wr = ET.fromstring(z.read('xl/richData/_rels/rdRichValueWebImage.xml.rels'))
+                    wi_rid_to_tgt = {rel.get('Id'): rel.get('Target').replace('../', 'xl/') for rel in wr.findall(f'{{{pkg_ns}}}Relationship')}
+
+            for row, pn in row_to_pn.items():
+                if row == 1: continue
+                vm = row_to_vm.get(row)
+                if vm is None: continue
+
+                img_path, rid = None, None
+                i_val = bk_to_i.get(vm)
+                if i_val is not None:
+                    rid = rvr_idx_to_rid.get(i_val)
+                    if rid: img_path = rid_to_file.get(rid)
+
+                if not img_path:
+                    rc = bk_to_rc.get(vm)
+                    if rc is not None:
+                        idx = rec_to_rvr_idx.get(rc)
+                        schema = rec_schema.get(rc, 0)
+                        if idx is not None:
+                            if schema == 2 and idx < len(web_img_rids):
+                                img_path = wi_rid_to_tgt.get(web_img_rids[idx])
+                            else:
+                                rid = rvr_idx_to_rid.get(idx)
+                                if rid: img_path = rid_to_file.get(rid)
+
+                if img_path and img_path in files:
+                    img_bytes = z.read(img_path)
+                    ext = img_path.rsplit('.', 1)[-1].lower()
+                    mime = 'image/png' if ext == 'png' else f'image/{ext}'
+                    result[pn] = f'data:{mime};base64,{base64.b64encode(img_bytes).decode()}'
+
+    except Exception as e:
+        print(f'  ⚠️  extract_imagemap_images 실패: {e}')
+    return result
+
+
 def gen_undelivered_section(data):
     return f'  const UNDELIVERED_DATA = {js(data)};'
 
@@ -2230,20 +2347,22 @@ def main():
         d['weekly25'] = compute_weekly_chart_25_from_ai(rows_25)
 
         # 미입고 이미지 맵
-        # 1단계: 스케줄 파일 드로잉 (fallback)
         img_map = {}
-        if os.path.exists(SCHED_PATH):
-            print(f'🖼️  품번 이미지 추출 중 (스케줄 파일)...')
-            style_best_color = build_style_best_color(SCHED_PATH)
-            img_map = extract_sched_images(SCHED_PATH, style_best_color)
-            print(f'   → {len(img_map)}개 품번 이미지 (스케줄 파일)')
 
-        # 2단계: AI_최종 파일 BA열 이미지로 덮어씀 (우선순위 높음)
+        # 1단계: AI_최종 파일 BA열 이미지 (Fallback)
         print(f'🖼️  품번 이미지 추출 중 (AI_최종 파일 BA열)...')
         ai_imgs = extract_ai_final_images(AI_FINAL_PATH)
         if ai_imgs:
             img_map.update(ai_imgs)
-            print(f'   → {len(ai_imgs)}개 품번 이미지 (AI_최종 BA열, 우선 적용)')
+            print(f'   → {len(ai_imgs)}개 품번 이미지 (AI_최종 BA열 로드)')
+
+        # 2단계: 사용자가 직접 작성한 "이미지맵" 시트 전면 적용 (매핑 오류 방지용 최우선)
+        if os.path.exists(SCHED_PATH):
+            print(f'🖼️  품번 이미지 추출 중 (이미지맵 시트)...')
+            imap_imgs = extract_imagemap_images(SCHED_PATH)
+            if imap_imgs:
+                img_map.update(imap_imgs)
+                print(f'   → {len(imap_imgs)}개 품번 이미지 (이미지맵 시트, 완벽 반영 완료)')
         d['img_map'] = img_map
 
     # ── 기존 방식 (개별 PO/입고 파일) ─────────────────────────────────────
