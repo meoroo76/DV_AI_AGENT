@@ -57,12 +57,13 @@ NEW INPUT/
   26SS입고현황.xlsx / 25SS입고현황.xlsx ─┘
 ```
 
-### 이미지 추출 파이프라인 (3단계 우선순위)
+### 이미지 추출 파이프라인 (AI_최종 모드, 2단계)
 
 미입고 테이블 품번 이미지는 `main()` 내에서 순서대로 적용·덮어씀:
-1. `extract_sched_images()` — 스케줄 파일에서 추출 (base, ~177개)
-2. `extract_ai_final_images()` — AI_최종 BA열 이미지로 덮어씀 (높은 우선순위)
-3. `download_cdn_images()` — CDN(`static-dashff.fnf.co.kr`)에서 나머지 다운로드 (**내부망 전용**)
+1. `extract_ai_final_images()` — AI_최종 BA열 이미지 (base)
+2. `extract_imagemap_images()` — 스케줄 파일 **이미지맵 시트** 전면 적용 (최우선, 매핑 오류 방지)
+
+> 레거시 `extract_sched_images()` 와 `download_cdn_images()` 는 AI_최종 모드에서 호출되지 않음. CDN은 내부망 전용으로 현재 비활성화 상태.
 
 ### update_dashboard.py 핵심 함수
 | 함수 | 역할 |
@@ -84,9 +85,10 @@ NEW INPUT/
 | `compute_weekly_chart(unified_rows_26, sched_map)` | 레거시 모드 26SS 주차별 차트 |
 | `compute_weekly_chart_25(po_rows_25, recv_raw_25, sm)` | 레거시 모드 25SS 주차별 차트 |
 | `build_style_best_color(sched_path)` | 스케줄 파일 F열 컬러 정보 → `{스타일코드: 대표색}` |
-| `extract_sched_images(sched_path, style_best_color)` | 스케줄 파일 이미지 추출 — `rdRichValueWebImage.xml` → `valueMetadata` fallback 순 |
+| `extract_sched_images(sched_path, style_best_color)` | 스케줄 파일 이미지 추출 — `rdRichValueWebImage.xml` → `valueMetadata` fallback 순 (레거시 모드 전용) |
 | `extract_ai_final_images(path)` | AI_최종 파일 BA열 이미지 추출 → `{품번: base64}` |
-| `download_cdn_images(pn_list)` | CDN URL(`{pn}_가로.png`)로 이미지 다운로드 (내부망 전용) |
+| `extract_imagemap_images(sched_path)` | 스케줄 파일 **이미지맵 시트** B열(품번)+C열(=IMAGE()) → `{품번: base64}`. 3-라우트 Schema 엔진 (Schema 0/2/futureMetadata). 177개(100%) 추출. |
+| `download_cdn_images(pn_list)` | CDN URL(`{pn}_가로.png`)로 이미지 다운로드 (내부망 전용, 현재 비활성화) |
 | `gen_kpi_cards(d)` | KPI 카드 HTML 생성 |
 | `gen_*_section(d)` | JS 데이터 블록 문자열 생성 |
 | `update_html(d, ref_date_str)` | 마커 기반으로 HTML 내 데이터 섹션 교체 |
@@ -121,7 +123,7 @@ NEW INPUT/
 | `24fw-26ss_stylemaster_v8.csv` | 스타일마스터 — `style_id`, `season`, `gender`, `category`, `detail1` 컬럼 |
 | `26SS_PO.xlsx` / `25SS_PO.xlsx` | 발주 데이터 — `스타일코드`, `협력사`, 발주수량, 발주금액 등 |
 | `26SS입고현황.xlsx` / `25SS입고현황.xlsx` | 입고현황 데이터 |
-| `■ 26SS_DV_생산스케줄 취합_*.xlsx` | 26SS 생산 스케줄 (주차별 입고예정) — 파일명 변경 시 `update_dashboard.py` 28번째 줄 `SCHED_PATH` 상수를 직접 수정 |
+| `■ 26SS_DV_생산스케줄 취합_*.xlsx` | 26SS 생산 스케줄 (주차별 입고예정) — 파일명 변경 시 `update_dashboard.py` 29번째 줄 `SCHED_PATH` 상수를 직접 수정 |
 | `26SS(25SS) 발주입고현황_0312.xlsx` | **AI_최종 모드 primary 소스** — `AI_최종` 시트에 25SS·26SS 통합 데이터 + 품번 이미지(BA열) + 스타일 히스토리(T열) 포함. 파일명 변경 시 `AI_FINAL_PATH` 상수 수정. `update_dashboard_legacy.py`에서도 사용 |
 | `PR정보.xlsx`, `25SS_INBOUND_FINAL.xlsx` | 현재 스크립트 미사용 — 참고용 보조 데이터 |
 
@@ -142,12 +144,19 @@ NEW INPUT/
 - 입고현황 파일: `그룹발주번호` 컬럼
 - 두 컬럼 값이 일치해야 입고 데이터가 연결됨
 
-### Excel richData 이미지 파싱 (extract_sched_images)
-`=IMAGE(URL)` 함수 이미지는 xlsx 내부에 두 가지 경로로 저장될 수 있다:
-- **경로 A** (`rdRichValueWebImage.xml`): `<webImageSrd>` → rId → URL (하이퍼링크 rel) 또는 캐시 이미지. `futureMetadata` 블록으로 셀과 연결.
-- **경로 B** (신버전): `valueMetadata` 블록의 `rc` 속성(`vm="..."`)으로 연결. `rdrichvalue.xml` 레코드에서 추출. `extract_sched_images()`는 경로 A 실패 시 경로 B로 fallback.
+### Excel richData 이미지 파싱
 
-`parse_xlsx()`는 시트 데이터만 읽으며 이 richData 구조를 처리하지 않음 — 이미지 추출은 반드시 `extract_sched_images()` / `extract_ai_final_images()` 전용 함수 사용.
+`=IMAGE(URL)` 함수 이미지는 xlsx 삽입 방식에 따라 3가지 스키마로 파편화:
+- **Schema 0 (로컬 이미지)**: `valueMetadata` → `rdrichvalue(s=0)` → `richValueRel` → 이미지 파일
+- **Schema 2 (웹 복사 이미지)**: `valueMetadata` → `rdrichvalue(s=2)` → `rdRichValueWebImage.xml` → 이미지
+- **futureMetadata (구버전)**: `futureMetadata > rvb[i]` → `richValueRel` → 이미지 파일
+
+`extract_imagemap_images()`의 3-라우트 Fallback 체인:
+1. Route 1: `bk_to_i(futureMetadata)` → `rvr_idx_to_rid` → 이미지
+2. Route 2A: `bk_to_rc(valueMetadata)` → `rec_schema==2` → `web_img_rids[idx]` → WebImage
+3. Route 2B: `bk_to_rc(valueMetadata)` → `rec_schema==0` → `rvr_idx_to_rid` → 이미지
+
+`parse_xlsx()`는 시트 데이터만 읽으며 richData 구조를 처리하지 않음 — 이미지 추출은 전용 함수 사용.
 
 ## 파일 역할 구분
 
@@ -159,6 +168,8 @@ NEW INPUT/
 | `_archive/` | 1차 개발 버전 로컬 백업 (gitignore) |
 | `NEW INPUT/` | 원본 Excel/CSV 데이터 (gitignore — 절대 커밋 금지) |
 | `delivery-dashboard*.html` | gitignore 대상 — index.html 전환 전 레거시 파일. 로컬에 잔존하지만 Git 추적 안 됨 |
+| `debug_img.py`, `inspect_excel_header.py`, `test*.py` | 개발 중 임시 디버그/테스트 스크립트 — `.gitignore`에 미등록(untracked), 커밋 불필요. 필요 시 `.gitignore`에 추가 |
+| `update_dashboard_legacy.py` | gitignore 대상 — 레거시 모드 개발 이력용 보관본 |
 
 ## 버전 관리 규칙
 
@@ -173,6 +184,7 @@ NEW INPUT/
 | `docs/`, `README.md`, `CLAUDE.md` | `delivery-dashboard*.html` (날짜·버전 파일) |
 | | `_archive/`, `chart.min.js`, `.bkit/`, `__pycache__/` |
 | | `update_dashboard_legacy.py`, `.vercel/` |
+| | `debug_img.py`, `inspect_excel_header.py`, `test*.py` — 현재 미등록, 수동 추가 필요 |
 
 ## PDCA 문서 위치
 
