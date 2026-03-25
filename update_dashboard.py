@@ -2398,6 +2398,11 @@ def update_html(d, ref_date_str):
         '// ═══ WEEKLY_DATA_END ═══',
         gen_weekly_section(d['weekly26'], d['weekly25']))
 
+    html = replace_between(html,
+        '<!-- ═ INSIGHT_SECTION_BEGIN ═ -->',
+        '<!-- ═ INSIGHT_SECTION_END ═ -->',
+        gen_insight_section(d))
+
     html = re.sub(
         r'(기준일[^<]*?)<strong[^>]*?>([\d.]+)</strong>',
         lambda m: m.group(0).replace(m.group(2), ref_date_str),
