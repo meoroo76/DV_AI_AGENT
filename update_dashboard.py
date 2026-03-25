@@ -1911,6 +1911,141 @@ def gen_img_map_section(img_map):
 def gen_vendor_section(data):
     return f'  const VENDOR_DATA = {js(data)};'
 
+def gen_insight_section(d):
+    from datetime import datetime
+
+    lines = []
+
+    # ── 1. 전체 입고율 비교 ──────────────────────────────────────────
+    t26 = d['kpi_total']['s26']
+    t25 = d['kpi_total']['s25']
+    r26 = rate(t26['qr'], t26['qo'])
+    r25 = rate(t25['qr'], t25['qo'])
+    delta = round(r26 - r25, 1)
+
+    if delta >= 5:
+        rate_icon = '✅'
+        rate_color = 'var(--google-green)'
+        rate_msg = f'전년 동기 대비 <strong>+{delta}%p</strong> 상회'
+    elif delta >= -5:
+        rate_icon = '➡️'
+        rate_color = 'var(--google-yellow)'
+        rate_msg = f'전년 동기 대비 <strong>{delta:+.1f}%p</strong> 유사 수준'
+    else:
+        rate_icon = '⚠️'
+        rate_color = 'var(--google-red)'
+        rate_msg = f'전년 동기 대비 <strong>{delta:+.1f}%p</strong> 하회 — 집중 점검 필요'
+
+    lines.append(f'''
+    <div class="insight-row">
+      <span class="insight-icon">{rate_icon}</span>
+      <div class="insight-body">
+        <span class="insight-label">전체 입고율</span>
+        <span class="insight-value" style="color:{rate_color};">26SS {r26}%</span>
+        <span class="insight-desc">{rate_msg} (25SS {r25}%)</span>
+      </div>
+    </div>''')
+
+    # ── 2. 복종별 최저 입고율 경보 ───────────────────────────────────
+    cat_rates = []
+    cat_data = d.get('CAT_DATA', {}).get('ALL', {})
+    for cat in ['down', 'outer', 'top', 'bottom', 'acc']:
+        s26 = cat_data.get(cat, {}).get('s26', {})
+        r = s26.get('rate', 0) or 0
+        oq = s26.get('ord', 0) or 0
+        if oq > 0:
+            cat_rates.append((cat, r))
+    cat_rates.sort(key=lambda x: x[1])
+
+    CAT_LABEL = {'down': 'Down', 'outer': 'Outer', 'top': 'Top', 'bottom': 'Bottom', 'acc': 'Acc'}
+    for cat, cr in cat_rates[:2]:
+        gap = round(cr - r26, 1)
+        if cr < 50:
+            icon, color = '🔴', 'var(--google-red)'
+            desc = f'전체 평균 대비 <strong>{gap:+.1f}%p</strong> — 즉각 점검'
+        elif cr < r26 - 10:
+            icon, color = '🟡', 'var(--google-yellow)'
+            desc = f'전체 평균 대비 <strong>{gap:+.1f}%p</strong> — 모니터링'
+        else:
+            break
+        lines.append(f'''
+    <div class="insight-row">
+      <span class="insight-icon">{icon}</span>
+      <div class="insight-body">
+        <span class="insight-label">{CAT_LABEL.get(cat, cat)} 복종</span>
+        <span class="insight-value" style="color:{color};">입고율 {cr}%</span>
+        <span class="insight-desc">{desc}</span>
+      </div>
+    </div>''')
+
+    # ── 3. 협력사 지연 TOP 3 ─────────────────────────────────────────
+    vendor_data = d.get('vendor', [])
+    low_vendors = [v for v in vendor_data if (v.get('oq') or 0) >= 100]
+    low_vendors.sort(key=lambda x: x.get('rate', 100))
+    for v in low_vendors[:3]:
+        vr = v.get('rate', 0)
+        if vr >= r26 - 5:
+            break
+        vname = v.get('vendor', '')
+        gap = round(vr - r26, 1)
+        icon = '🔴' if vr < 40 else '🟡'
+        color = 'var(--google-red)' if vr < 40 else 'var(--google-orange)'
+        lines.append(f'''
+    <div class="insight-row">
+      <span class="insight-icon">{icon}</span>
+      <div class="insight-body">
+        <span class="insight-label">{vname}</span>
+        <span class="insight-value" style="color:{color};">입고율 {vr}%</span>
+        <span class="insight-desc">전체 평균 대비 <strong>{gap:+.1f}%p</strong></span>
+      </div>
+    </div>''')
+
+    # ── 4. 미입고 현황 & 임박 경보 ──────────────────────────────────
+    undelivered = d.get('undelivered', [])
+    total_un = len(undelivered)
+    today = datetime.now().date()
+    urgent = [r for r in undelivered
+              if r.get('agree') and r['agree'] != '—'
+              and (datetime.strptime(r['agree'], '%Y-%m-%d').date() - today).days <= 14]
+    past   = [r for r in undelivered
+              if r.get('agree') and r['agree'] != '—'
+              and (datetime.strptime(r['agree'], '%Y-%m-%d').date() - today).days < 0]
+
+    if past:
+        icon, color = '🔴', 'var(--google-red)'
+        desc = f'합의납기 초과 <strong>{len(past)}건</strong> 포함 — 긴급 처리'
+    elif urgent:
+        icon, color = '🟡', 'var(--google-orange)'
+        desc = f'2주 이내 납기 <strong>{len(urgent)}건</strong> — 일정 재확인'
+    else:
+        icon, color = '📦', 'var(--ink-2)'
+        desc = '임박 납기 없음'
+
+    lines.append(f'''
+    <div class="insight-row">
+      <span class="insight-icon">{icon}</span>
+      <div class="insight-body">
+        <span class="insight-label">미입고 현황</span>
+        <span class="insight-value" style="color:{color};">총 {total_un}건</span>
+        <span class="insight-desc">{desc}</span>
+      </div>
+    </div>''')
+
+    # ── HTML 조립 ────────────────────────────────────────────────────
+    rows_html = '\n'.join(lines)
+    return f'''
+  <div class="section-divider"></div>
+  <section class="section">
+    <div class="section-title" style="margin-bottom:16px;">
+      <div class="section-title-bar" style="background:var(--google-yellow);"></div>
+      <h2>AI 인사이트 &amp; 주의 사항</h2>
+      <span class="section-sub">스크립트 실행 시 자동 생성</span>
+    </div>
+    <div class="insight-card">
+      {rows_html}
+    </div>
+  </section>'''
+
 def gen_weekly_section(data26, data25=None):
     lines = [f'  const WK_ROWS_26 = {js(data26)};']
     lines.append(f'  const WK_ROWS_25 = {js(data25 if data25 is not None else [])};')
