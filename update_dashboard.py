@@ -2052,6 +2052,246 @@ def gen_weekly_section(data26, data25=None):
     return '\n'.join(lines)
 
 
+# ── 칼라사이즈 로드 (26SS) ────────────────────────────────────────────────
+def load_color_size_26(path):
+    """AI_최종 파일 → 26SS_동일기간_칼라사이즈 시트 로드
+    Returns: list of dicts with keys:
+      pn(스타일코드), name(스타일명), vendor(협력사명),
+      color(컬러), size(사이즈), date_serial(입고일),
+      oq(발주수량), rq(입고수량)
+    """
+    ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    TARGET = '26SS_동일기간_칼라사이즈'
+
+    def find(node, tag):
+        return node.findall(f'.//{{{ns}}}{tag}')
+
+    with zipfile.ZipFile(path) as zf:
+        ss = []
+        if 'xl/sharedStrings.xml' in zf.namelist():
+            root = ET.parse(zf.open('xl/sharedStrings.xml')).getroot()
+            for si in find(root, 'si'):
+                ss.append(''.join(t.text or '' for t in si.iter(f'{{{ns}}}t')))
+
+        rel_root = ET.parse(zf.open('xl/_rels/workbook.xml.rels')).getroot()
+        rel_map  = {r.get('Id'): r.get('Target') for r in rel_root}
+        wb_root  = ET.parse(zf.open('xl/workbook.xml')).getroot()
+
+        sheet_file = None
+        for s in find(wb_root, 'sheet'):
+            if s.get('name') == TARGET:
+                rid = (s.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+                       or s.get('r:id') or '')
+                if rid in rel_map:
+                    sheet_file = 'xl/' + rel_map[rid]
+                break
+        if not sheet_file:
+            print(f'  ⚠️  시트 없음: {TARGET}')
+            return []
+
+        ws_root = ET.parse(zf.open(sheet_file)).getroot()
+
+    def col_idx(ref):
+        letters = re.match(r'[A-Z]+', ref).group()
+        n = 0
+        for ch in letters:
+            n = n * 26 + (ord(ch) - ord('A') + 1)
+        return n - 1
+
+    def cell_val(c):
+        t = c.get('t', '')
+        v = c.find(f'{{{ns}}}v')
+        if v is None or v.text is None:
+            return None
+        if t == 's':
+            return ss[int(v.text)]
+        try:
+            f = float(v.text)
+            return int(f) if f == int(f) else f
+        except Exception:
+            return v.text
+
+    all_rows = find(ws_root, 'row')
+    if not all_rows:
+        return []
+
+    headers = {}
+    for c in all_rows[0].findall(f'{{{ns}}}c'):
+        idx = col_idx(c.get('r', 'A1'))
+        val = cell_val(c)
+        if val is not None:
+            headers[idx] = str(val).strip()
+
+    rows = []
+    for row in all_rows[1:]:
+        d = {}
+        for c in row.findall(f'{{{ns}}}c'):
+            idx = col_idx(c.get('r', 'A1'))
+            if idx in headers:
+                d[headers[idx]] = cell_val(c)
+        pn  = str(d.get('스타일코드', '') or '').strip()
+        rq  = sf(d.get('입고수량'))
+        if not pn or rq <= 0:
+            continue
+        rows.append({
+            'pn':          pn,
+            'name':        str(d.get('스타일명',  '') or '').strip(),
+            'vendor':      str(d.get('협력사명',  '') or '').strip(),
+            'color':       str(d.get('컬러',      '') or '').strip(),
+            'size':        str(d.get('사이즈',    '') or '').strip(),
+            'date_serial': d.get('입고일'),
+            'oq':          round(sf(d.get('발주수량'))),
+            'rq':          round(rq),
+        })
+    return rows
+
+
+def _week_key(serial):
+    """Excel serial → (ISO year, ISO week, week_start_date)"""
+    if not serial or not isinstance(serial, (int, float)):
+        return None
+    dt = datetime(1899, 12, 30) + timedelta(days=int(serial))
+    iso = dt.isocalendar()   # (year, week, weekday)
+    return iso[0], iso[1], dt - timedelta(days=dt.weekday())
+
+
+def _week_label(week_start):
+    """week_start(datetime) → '3/23~3/29' 형태 레이블"""
+    week_end = week_start + timedelta(days=6)
+    if week_start.month == week_end.month:
+        return f'{week_start.month}/{week_start.day}~{week_end.day}'
+    return f'{week_start.month}/{week_start.day}~{week_end.month}/{week_end.day}'
+
+
+def compute_weekly_recv(color_rows, img_map, ref_date=None):
+    """주간별 입고 실적 집계 — 최근 5주 (이번 주 포함)
+
+    Returns: list of week-dicts, sorted newest→oldest
+    """
+    if ref_date is None:
+        ref_date = datetime.today()
+
+    # 이번 주 월요일
+    today_mon = ref_date - timedelta(days=ref_date.weekday())
+    today_mon = today_mon.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # 최근 5주 범위 계산
+    week_starts = [today_mon - timedelta(weeks=i) for i in range(4, -1, -1)]
+    week_map = {}  # (year, wk_num) → index in week_starts
+    for ws in week_starts:
+        iso = ws.isocalendar()
+        week_map[(iso[0], iso[1])] = ws
+
+    # 행 → 주차 그룹핑
+    from collections import defaultdict
+    buckets = defaultdict(list)   # week_start → [row]
+    for row in color_rows:
+        info = _week_key(row['date_serial'])
+        if info is None:
+            continue
+        yr, wk, ws = info
+        if (yr, wk) not in week_map:
+            continue
+        buckets[week_map[(yr, wk)]].append(row)
+
+    weeks_out = []
+    for ws in week_starts:
+        rows_in_week = buckets.get(ws, [])
+        iso = ws.isocalendar()
+
+        # 스타일별 집계
+        style_acc = defaultdict(lambda: {
+            'name': '', 'vendor': '', 'oq': 0, 'rq': 0,
+            'colors': set(), 'detail': []
+        })
+        for r in rows_in_week:
+            acc = style_acc[r['pn']]
+            acc['name']   = acc['name']   or r['name']
+            acc['vendor'] = acc['vendor'] or r['vendor']
+            acc['oq'] += r['oq']
+            acc['rq'] += r['rq']
+            acc['colors'].add(r['color'])
+            acc['detail'].append({
+                'date':  to_date_str(r['date_serial']) if r['date_serial'] else '',
+                'color': r['color'],
+                'size':  r['size'],
+                'oq':    r['oq'],
+                'rq':    r['rq'],
+            })
+
+        styles = []
+        for pn, acc in sorted(style_acc.items()):
+            detail = sorted(acc['detail'], key=lambda x: (x['date'], x['color'], x['size']))
+            styles.append({
+                'pn':     pn,
+                'name':   acc['name'],
+                'vendor': acc['vendor'],
+                'oq':     acc['oq'],
+                'rq':     acc['rq'],
+                'colors': sorted(acc['colors']),
+                'detail': detail,
+            })
+        styles.sort(key=lambda x: -x['rq'])
+
+        total_rq = sum(s['rq'] for s in styles)
+        total_oq = sum(s['oq'] for s in styles)
+        weeks_out.append({
+            'wk':       f'{iso[0]}-W{iso[1]:02d}',
+            'label':    _week_label(ws),
+            'styles':   styles,
+            'total_oq': total_oq,
+            'total_rq': total_rq,
+        })
+
+    # 최신 주 먼저
+    weeks_out.reverse()
+    return weeks_out
+
+
+def compute_next_week_sched(sched_map, name_map, ref_date=None):
+    """차주 입고 예정 스타일 조회
+
+    sched_map: {스타일코드: int_serial}  ← load_schedule() 결과 (최후 ETA)
+    name_map:  {스타일코드: 스타일명}
+    Returns: list sorted by date
+    """
+    if ref_date is None:
+        ref_date = datetime.today()
+
+    # 차주 월~일
+    today_mon = ref_date - timedelta(days=ref_date.weekday())
+    next_mon  = today_mon + timedelta(weeks=1)
+    next_sun  = next_mon  + timedelta(days=6)
+
+    BASE = datetime(1899, 12, 30)
+    results = []
+
+    for pn, serial in sched_map.items():
+        if not serial or not isinstance(serial, (int, float)):
+            continue
+        dt = BASE + timedelta(days=int(serial))
+        if not (next_mon <= dt <= next_sun):
+            continue
+        results.append({
+            'pn':         pn,
+            'name':       name_map.get(pn, ''),
+            'sched_date': dt.strftime('%Y-%m-%d'),
+            'sched_qty':  0,   # load_schedule은 qty 미포함 — 표시만
+        })
+
+    results.sort(key=lambda x: (x['sched_date'], x['pn']))
+    return results
+
+
+def gen_weekly_recv_section(recv_data, next_week_data):
+    """WEEKLY_RECV_BEGIN/END 마커 사이 JS 데이터 블록 생성"""
+    lines = [
+        f'  const WEEKLY_RECV_DATA = {js(recv_data)};',
+        f'  const NEXT_WEEK_SCHED  = {js(next_week_data)};',
+    ]
+    return '\n'.join(lines)
+
+
 # ── KPI 카드 HTML 생성 ─────────────────────────────────────────────────────
 def pct_class(v):
     if v >= 70: return 'pct-green'
@@ -2403,6 +2643,11 @@ def update_html(d, ref_date_str):
         '<!-- ═ INSIGHT_SECTION_END ═ -->',
         gen_insight_section(d))
 
+    html = replace_between(html,
+        '// ═══ WEEKLY_RECV_BEGIN ═══',
+        '// ═══ WEEKLY_RECV_END ═══',
+        gen_weekly_recv_section(d.get('weekly_recv', []), d.get('next_week_sched', [])))
+
     html = re.sub(
         r'(기준일[^<]*?)<strong[^>]*?>([\d.]+)</strong>',
         lambda m: m.group(0).replace(m.group(2), ref_date_str),
@@ -2504,6 +2749,18 @@ def main():
                 img_map.update(imap_imgs)
                 print(f'   → {len(imap_imgs)}개 품번 이미지 (이미지맵 시트, 완벽 반영 완료)')
         d['img_map'] = img_map
+
+        # 주간 입고 실적 + 차주 예정
+        print('📆 주간 입고 실적 / 차주 예정 집계 중...')
+        color_rows = load_color_size_26(AI_FINAL_PATH)
+        print(f'   → 칼라사이즈 {len(color_rows)}행')
+        ref_dt = datetime.today()
+        d['weekly_recv']    = compute_weekly_recv(color_rows, img_map, ref_dt)
+        # 스타일코드 → 스타일명 맵 (차주 예정 이름 표시용)
+        name_map = {r['pn']: r['name'] for r in color_rows if r['name']}
+        d['next_week_sched'] = compute_next_week_sched(sched_map, name_map, ref_dt)
+        recv_cnt = sum(len(w['styles']) for w in d['weekly_recv'])
+        print(f'   → 주간 입고 {recv_cnt}건 / 차주 예정 {len(d["next_week_sched"])}건')
 
     # ── 기존 방식 (개별 PO/입고 파일) ─────────────────────────────────────
     else:

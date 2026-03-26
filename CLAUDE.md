@@ -89,22 +89,39 @@ NEW INPUT/
 | `extract_ai_final_images(path)` | AI_최종 파일 BA열 이미지 추출 → `{품번: base64}` |
 | `extract_imagemap_images(sched_path)` | 스케줄 파일 **이미지맵 시트** B열(품번)+C열(=IMAGE()) → `{품번: base64}`. 3-라우트 Schema 엔진 (Schema 0/2/futureMetadata). 177개(100%) 추출. |
 | `download_cdn_images(pn_list)` | CDN URL(`{pn}_가로.png`)로 이미지 다운로드 (내부망 전용, 현재 비활성화) |
-| `gen_kpi_cards(d)` | KPI 카드 HTML 생성 |
-| `gen_*_section(d)` | JS 데이터 블록 문자열 생성 |
-| `update_html(d, ref_date_str)` | 마커 기반으로 HTML 내 데이터 섹션 교체 |
+| `gen_kpi_cards(d)` | KPI 카드 HTML 생성 (`pct_class()`, `delta_arrow()`, `delta_class()` 헬퍼 사용) |
+| `gen_cat_data_section(d)` | 복종별 JS 데이터 블록 생성 |
+| `gen_order_metric_section(d)` | 오더구분별 JS 데이터 블록 생성 |
+| `gen_month_data_section(d)` | 월별 JS 데이터 블록 생성 — `MONTH_DATA`(집계) + `MONTH_DETAIL_DATA`(발주월별 복종별 상세) 포함 |
+| `gen_undelivered_section(data)` | 미입고 리스트 JS 데이터 블록 생성 |
+| `gen_img_map_section(img_map)` | 이미지 맵 JS 데이터 블록 생성 |
+| `gen_vendor_section(data)` | 협력사별 진도율 JS 데이터 블록 생성 |
+| `gen_weekly_section(data26, data25)` | 주차별 차트 JS 데이터 블록 생성 |
+| `gen_insight_section(d)` | 규칙 기반 AI 인사이트 자동 생성 — KPI·복종·오더 지표 기반으로 텍스트 인사이트 HTML 생성 |
+| `load_color_size_26(path)` | AI_최종 파일 → `26SS_동일기간_칼라사이즈` 시트 로드 → `{pn, name, vendor, color, size, date_serial, oq, rq}` 행 목록 |
+| `compute_weekly_recv(color_rows, img_map, ref_date)` | 주간별 입고 실적 집계 — 최근 5주, 스타일×컬러×사이즈 상세 포함 |
+| `compute_next_week_sched(sched_map, name_map, ref_date)` | `sched_map({pn: serial})` 기준 차주(Mon~Sun) 예정 스타일 목록 반환 |
+| `gen_weekly_recv_section(recv_data, next_week_data)` | `WEEKLY_RECV_BEGIN/END` 마커 사이 JS 데이터 블록 생성 |
+| `replace_between(html, begin, end, new)` | 마커 사이 구간을 `re.subn()` 으로 교체 (lambda 사용 — `\n` 리터럴 오해석 방지) |
+| `update_html(d, ref_date_str)` | 마커 기반으로 HTML 내 데이터 섹션 전체 교체 |
 | `_make_offline_version(html, ref_date_str)` | `chart.min.js`를 인라인 삽입해 오프라인 버전 생성 |
 | `to_date_str(v)` | Excel 날짜 시리얼 → `YYYY-MM-DD` 문자열 변환 |
+| `norm_cat(v)` | 복종명 정규화 — `CAT_ALIAS` 딕셔너리로 별칭 처리 (예: `'shoes'→'acc'`) |
+| `norm_order(v)` | 오더구분 정규화 (MAIN/SPOT/RE-ORDER) |
+| `norm_season(v)` | 시즌명 정규화 (25SS/26SS) |
 
 ### HTML 마커 구조
 `index.html` 내부에 마커로 구분된 교체 구간이 있다:
 - `<!-- ═ KPI_GRID_BEGIN ═ -->` … `<!-- ═ KPI_GRID_END ═ -->` — KPI 카드 HTML
 - `// ═══ CAT_DATA_BEGIN ═══` … `// ═══ CAT_DATA_END ═══` — 복종별 수량/스타일/금액 JS 데이터
 - `// ═══ ORDER_METRIC_BEGIN ═══` … `// ═══ ORDER_METRIC_END ═══` — 오더구분별 JS 데이터
-- `// ═══ MONTH_DATA_BEGIN ═══` … `// ═══ MONTH_DATA_END ═══` — 월별 JS 데이터
+- `// ═══ MONTH_DATA_BEGIN ═══` … `// ═══ MONTH_DATA_END ═══` — 월별 JS 데이터 (`MONTH_DATA` + `MONTH_DETAIL_DATA`)
 - `// ═══ UNDELIVERED_BEGIN ═══` … `// ═══ UNDELIVERED_END ═══` — 26SS 미입고 리스트 JS 데이터
 - `// ═══ IMG_DATA_BEGIN ═══` … `// ═══ IMG_DATA_END ═══` — 품번 이미지 맵 JS 데이터 (base64)
 - `// ═══ VENDOR_BEGIN ═══` … `// ═══ VENDOR_END ═══` — 협력사별 진도율 JS 데이터
 - `// ═══ WEEKLY_DATA_BEGIN ═══` … `// ═══ WEEKLY_DATA_END ═══` — 주차별 입고 차트 JS 데이터
+- `<!-- ═ INSIGHT_SECTION_BEGIN ═ -->` … `<!-- ═ INSIGHT_SECTION_END ═ -->` — 규칙 기반 AI 인사이트 HTML 블록
+- `// ═══ WEEKLY_RECV_BEGIN ═══` … `// ═══ WEEKLY_RECV_END ═══` — 주간 입고 실적 + 차주 예정 JS 데이터 (`WEEKLY_RECV_DATA`, `NEXT_WEEK_SCHED`)
 
 마커를 HTML에서 삭제하면 자동 업데이트가 깨진다.
 
@@ -126,6 +143,14 @@ NEW INPUT/
 | `■ 26SS_DV_생산스케줄 취합_*.xlsx` | 26SS 생산 스케줄 (주차별 입고예정) — 파일명 변경 시 `update_dashboard.py` 29번째 줄 `SCHED_PATH` 상수를 직접 수정 |
 | `26SS(25SS) 발주입고현황_0312.xlsx` | **AI_최종 모드 primary 소스** — `AI_최종` 시트에 25SS·26SS 통합 데이터 + 품번 이미지(BA열) + 스타일 히스토리(T열) 포함. 파일명 변경 시 `AI_FINAL_PATH` 상수 수정. `update_dashboard_legacy.py`에서도 사용 |
 | `PR정보.xlsx`, `25SS_INBOUND_FINAL.xlsx` | 현재 스크립트 미사용 — 참고용 보조 데이터 |
+
+### compute_all() 반환 키 구조
+`compute_all(rows)` → dict, 주요 키:
+- `KPI` — 발주수량, 입고수량, 진도율, 발주금액, 입고금액 (25SS/26SS)
+- `CAT` — 복종별 집계 `{cat: {s25:{oq,rq,pq,os,rs,oa,ra}, s26:{...}}}`
+- `ORDER` — 오더구분별 집계 (MAIN/SPOT/RE-ORDER)
+- `MONTH` — 발주월별 요약 집계
+- `MONTH_DETAIL` — 발주월 × 복종별 상세 집계 `{s25:{월:{cat:{oq,rq,...}}}, s26:{...}}` — `MONTH_DETAIL_DATA` JS 변수로 주입, 라인차트용
 
 ### 오더 분류 로직
 `classify()` 함수가 스타일코드·오더번호·발주일 기준으로 MAIN/SPOT/RE-ORDER를 판정.
